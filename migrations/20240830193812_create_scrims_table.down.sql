@@ -1,0 +1,2 @@
+DROP TABLE scrims;
+

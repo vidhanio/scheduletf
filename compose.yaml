@@ -1,0 +1,31 @@
+name: tf2-team-manager
+
+services:
+  bot:
+    container_name: tf2-team-manager-bot
+    image: ghcr.io/vidhanio/tf2-team-manager:latest
+    build: .
+    environment:
+      DISCORD_BOT_TOKEN: $DISCORD_BOT_TOKEN
+      GUILDS: $GUILDS
+      CHANNELS: $CHANNELS
+      DATABASE_URL: postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@database:5432/$POSTGRES_DB
+
+  database:
+    container_name: tf2-team-manager-database
+    image: postgres
+    environment:
+      POSTGRES_USER: $POSTGRES_USER
+      POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+      POSTGRES_DB: $POSTGRES_DB
+    volumes:
+      - database:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
+networks:
+  default:
+    name: tf2-team-manager-network
+volumes:
+  database:
+    name: tf2-team-manager-database
+    driver: local
