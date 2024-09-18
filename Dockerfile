@@ -13,5 +13,5 @@ RUN cargo build --release
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/target/release/tf2-team-manager /usr/local/bin/
-ENTRYPOINT ["/usr/local/bin/tf2-team-manager"]
+COPY --from=builder /app/target/release/scrimmy /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/scrimmy"]

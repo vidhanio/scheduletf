@@ -9,7 +9,7 @@ env:
 
   POSTGRES_USER: vidhanio
   POSTGRES_PASSWORD: password
-  POSTGRES_DB: tf2-team-manager-ci
+  POSTGRES_DB: scrimmy-ci
 
   DATABASE_URL: postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost/$POSTGRES_DB
 
@@ -171,8 +171,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/vidhanio/tf2-team-manager
-            registry.fly.io/tf2-team-manager
+            ghcr.io/vidhanio/scrimmy
+            registry.fly.io/scrimmy
           tags: |
             type=ref,event=branch
             type=sha
@@ -214,7 +214,7 @@ jobs:
 
     environment:
       name: Development
-      url: https://fly.io/apps/tf2-team-manager/monitoring
+      url: https://fly.io/apps/scrimmy/monitoring
 
     runs-on: ubuntu-latest
 

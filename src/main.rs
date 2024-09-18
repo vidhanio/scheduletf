@@ -1,6 +1,6 @@
 use std::env;
 
-use tf2_team_manager::Config;
+use scrimmy::Config;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -14,7 +14,7 @@ async fn main() -> color_eyre::Result<()> {
     let fmt = tracing_subscriber::fmt().with_env_filter(
         env::var(EnvFilter::DEFAULT_ENV)
             .as_deref()
-            .unwrap_or("warn,tf2_team_manager=trace"),
+            .unwrap_or("warn,scrimmy=trace"),
     );
 
     if config.production {
@@ -23,7 +23,7 @@ async fn main() -> color_eyre::Result<()> {
         fmt.pretty().init();
     }
 
-    tf2_team_manager::run(config).await?;
+    scrimmy::run(config).await?;
 
     Ok(())
 }

@@ -1,9 +1,9 @@
-name: tf2-team-manager
+name: scrimmy
 
 services:
   bot:
-    container_name: tf2-team-manager-bot
-    image: ghcr.io/vidhanio/tf2-team-manager:latest
+    container_name: scrimmy-bot
+    image: ghcr.io/vidhanio/scrimmy:latest
     build: .
     environment:
       DISCORD_BOT_TOKEN: $DISCORD_BOT_TOKEN
@@ -12,7 +12,7 @@ services:
       DATABASE_URL: postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@database:5432/$POSTGRES_DB
 
   database:
-    container_name: tf2-team-manager-database
+    container_name: scrimmy-database
     image: postgres
     environment:
       POSTGRES_USER: $POSTGRES_USER
@@ -24,8 +24,8 @@ services:
       - 5432:5432
 networks:
   default:
-    name: tf2-team-manager-network
+    name: scrimmy-network
 volumes:
   database:
-    name: tf2-team-manager-database
+    name: scrimmy-database
     driver: local
