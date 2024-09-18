@@ -1,0 +1,18 @@
+app = 'scrimmy'
+primary_region = 'lax'
+
+[build]
+image = 'registry.fly.io/scrimmy:latest'
+
+[env]
+DATA_DIR = '/data'
+PRODUCTION = 'true'
+
+[[mounts]]
+destination = '/data'
+source = 'tailered_mlb_bot_data'
+
+[[vm]]
+cpu_kind = 'shared'
+cpus = 1
+memory = '1gb'
