@@ -1,12 +1,9 @@
 #![allow(dead_code)]
 
-use serenity::all::{
-    ChannelId, ComponentInteraction, ComponentInteractionDataKind, CreateEmbed,
-    CreateInteractionResponse, CreateInteractionResponseMessage, GenericId, RoleId, UserId,
-};
-use time::{OffsetDateTime, UtcOffset};
+use serenity::all::{CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage};
+use time::{Date, OffsetDateTime, Time, UtcOffset};
 
-use crate::{error::BotError, BotResult};
+use crate::error::BotError;
 
 macro_rules! handle_error {
     ($result:expr) => {
@@ -23,6 +20,8 @@ macro_rules! handle_error {
         match $result {
             Ok(value) => value,
             Err(error) => {
+                tracing::error!(?error);
+
                 if $interaction
                     .create_response(
                         &$ctx,
@@ -110,160 +109,55 @@ pub fn success_response(description: impl Into<String>) -> CreateInteractionResp
     CreateInteractionResponse::Message(success_message(description))
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum ComponentInteractionDataType {
-    Button,
-    StringSelect,
-    UserSelect,
-    RoleSelect,
-    MentionableSelect,
-    ChannelSelect,
-    Unknown,
+pub trait OffsetDateTimeEtExt {
+    fn new_et(date: Date, time: Time) -> Self;
+
+    fn now_et() -> Self;
+
+    fn et_offset(&self) -> UtcOffset;
+
+    fn replace_with_et_offset(&self) -> Self;
+
+    fn to_et_offset(&self) -> Self;
+
+    fn et_short_date(&self) -> String;
+
+    fn et_long_date(&self) -> String;
 }
 
-impl From<&ComponentInteractionDataKind> for ComponentInteractionDataType {
-    fn from(kind: &ComponentInteractionDataKind) -> Self {
-        match kind {
-            ComponentInteractionDataKind::Button => Self::Button,
-            ComponentInteractionDataKind::StringSelect { .. } => Self::StringSelect,
-            ComponentInteractionDataKind::UserSelect { .. } => Self::UserSelect,
-            ComponentInteractionDataKind::RoleSelect { .. } => Self::RoleSelect,
-            ComponentInteractionDataKind::MentionableSelect { .. } => Self::MentionableSelect,
-            ComponentInteractionDataKind::ChannelSelect { .. } => Self::ChannelSelect,
-            ComponentInteractionDataKind::Unknown(..) => Self::Unknown,
-        }
+impl OffsetDateTimeEtExt for OffsetDateTime {
+    fn new_et(date: Date, time: Time) -> Self {
+        Self::new_utc(date, time).replace_with_et_offset()
     }
-}
-pub trait SelectMenuDataKind: Sized {
-    const DATA_TYPE: ComponentInteractionDataType;
 
-    fn values(data: &ComponentInteractionDataKind) -> Option<&Vec<Self>>;
-}
-
-impl SelectMenuDataKind for String {
-    const DATA_TYPE: ComponentInteractionDataType = ComponentInteractionDataType::StringSelect;
-
-    fn values(data: &ComponentInteractionDataKind) -> Option<&Vec<Self>> {
-        if let ComponentInteractionDataKind::StringSelect { values } = data {
-            Some(values)
-        } else {
-            None
-        }
-    }
-}
-
-impl SelectMenuDataKind for UserId {
-    const DATA_TYPE: ComponentInteractionDataType = ComponentInteractionDataType::UserSelect;
-
-    fn values(data: &ComponentInteractionDataKind) -> Option<&Vec<Self>> {
-        if let ComponentInteractionDataKind::UserSelect { values } = data {
-            Some(values)
-        } else {
-            None
-        }
-    }
-}
-
-impl SelectMenuDataKind for RoleId {
-    const DATA_TYPE: ComponentInteractionDataType = ComponentInteractionDataType::RoleSelect;
-
-    fn values(data: &ComponentInteractionDataKind) -> Option<&Vec<Self>> {
-        if let ComponentInteractionDataKind::RoleSelect { values } = data {
-            Some(values)
-        } else {
-            None
-        }
-    }
-}
-
-impl SelectMenuDataKind for GenericId {
-    const DATA_TYPE: ComponentInteractionDataType = ComponentInteractionDataType::MentionableSelect;
-
-    fn values(data: &ComponentInteractionDataKind) -> Option<&Vec<Self>> {
-        if let ComponentInteractionDataKind::MentionableSelect { values } = data {
-            Some(values)
-        } else {
-            None
-        }
-    }
-}
-
-impl SelectMenuDataKind for ChannelId {
-    const DATA_TYPE: ComponentInteractionDataType = ComponentInteractionDataType::ChannelSelect;
-
-    fn values(data: &ComponentInteractionDataKind) -> Option<&Vec<Self>> {
-        if let ComponentInteractionDataKind::ChannelSelect { values } = data {
-            Some(values)
-        } else {
-            None
-        }
-    }
-}
-
-pub fn get_single_from_select<'a, T: SelectMenuDataKind>(
-    component_name: &str,
-    interaction: &'a ComponentInteraction,
-) -> BotResult<&'a T> {
-    T::values(&interaction.data.kind).map_or_else(
-        || {
-            Err(BotError::IncorrectInteractionDataKind {
-                component: component_name.into(),
-                expected: T::DATA_TYPE,
-                got: (&interaction.data.kind).into(),
-            })
-        },
-        |values| match values.as_slice() {
-            [value] => Ok(value),
-            not_one_value => Err(BotError::IncorrectNumberOfItems {
-                component: component_name.into(),
-                expected: 1,
-                got: not_one_value.len(),
-            }),
-        },
-    )
-}
-
-pub trait ScrimOffsetExtension {
-    fn now_scrim() -> Self;
-
-    fn scrim_offset(&self) -> UtcOffset;
-
-    fn replace_with_scrim_offset(&self) -> Self;
-
-    fn to_scrim_offset(&self) -> Self;
-
-    fn short_date(&self) -> String;
-}
-
-impl ScrimOffsetExtension for OffsetDateTime {
-    fn scrim_offset(&self) -> UtcOffset {
+    fn et_offset(&self) -> UtcOffset {
         let ny = tzdb::time_zone::america::NEW_YORK;
 
-        let local_time_type = ny
-            .find_local_time_type(self.unix_timestamp())
-            .expect("local time type exists");
+        let local_time_type = ny.find_local_time_type(self.unix_timestamp()).unwrap();
 
-        UtcOffset::from_whole_seconds(local_time_type.ut_offset()).expect("offset is valid")
+        UtcOffset::from_whole_seconds(local_time_type.ut_offset()).unwrap()
     }
 
-    fn now_scrim() -> Self {
+    fn now_et() -> Self {
         let now = Self::now_utc();
 
-        now.to_scrim_offset()
+        now.to_et_offset()
     }
 
-    fn replace_with_scrim_offset(&self) -> Self {
-        self.replace_offset(self.scrim_offset())
+    fn replace_with_et_offset(&self) -> Self {
+        self.replace_offset(self.et_offset())
     }
 
-    fn to_scrim_offset(&self) -> Self {
-        self.to_offset(self.scrim_offset())
+    fn to_et_offset(&self) -> Self {
+        self.to_offset(self.et_offset())
     }
 
-    fn short_date(&self) -> String {
-        let this = self.to_scrim_offset();
+    fn et_short_date(&self) -> String {
+        let this = self.to_et_offset();
 
         let weekday = this.weekday();
+        let month = this.month();
+        let day = this.day();
         let hour_24 = this.hour();
         let hour = if hour_24 == 0 {
             12
@@ -273,7 +167,57 @@ impl ScrimOffsetExtension for OffsetDateTime {
             hour_24
         };
         let minute = this.minute();
+        let ampm = if hour_24 >= 12 { "PM" } else { "AM" };
 
-        format!("{weekday} {hour}:{minute:02}")
+        format!("{weekday}, {month} {day} at {hour}:{minute:02} {ampm}")
     }
+
+    fn et_long_date(&self) -> String {
+        let this = self.to_et_offset();
+
+        let now_date = Self::now_et().date();
+        let date = if this.date() == now_date {
+            "Today".to_owned()
+        } else if this.date() == now_date.next_day().unwrap() {
+            "Tomorrow".to_owned()
+        } else {
+            format!("{}, {} {}", this.weekday(), this.month(), this.day())
+        };
+
+        let hour_24 = this.hour();
+        let hour = if hour_24 == 0 {
+            12
+        } else if hour_24 > 12 {
+            hour_24 - 12
+        } else {
+            hour_24
+        };
+        let minute = this.minute();
+        let ampm = if hour_24 >= 12 { "PM" } else { "AM" };
+
+        format!("{date} at {hour}:{minute:02} {ampm}")
+    }
+}
+
+pub fn date_string(date: Date) -> String {
+    let weekday = date.weekday();
+    let month = date.month();
+    let day = date.day();
+
+    format!("{weekday}, {month} {day}")
+}
+
+pub fn time_string(time: Time) -> String {
+    let hour_24 = time.hour();
+    let hour = if hour_24 == 0 {
+        12
+    } else if hour_24 > 12 {
+        hour_24 - 12
+    } else {
+        hour_24
+    };
+    let minute = time.minute();
+    let ampm = if hour_24 >= 12 { "PM" } else { "AM" };
+
+    format!("{hour}:{minute:02} {ampm}")
 }

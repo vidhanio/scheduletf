@@ -5,57 +5,16 @@ on:
   - pull_request
 
 env:
-  SQLX_FEATURES: "rustls,postgres"
-
   POSTGRES_USER: vidhanio
   POSTGRES_PASSWORD: password
-  POSTGRES_DB: scrimmy-ci
+  POSTGRES_DB: matchbox-ci
 
   DATABASE_URL: postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost/$POSTGRES_DB
 
 jobs:
-  check-sqlx:
-    name: Check SQLx Query Metadata
-
-    permissions:
-      contents: read
-
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres
-        env:
-          POSTGRES_USER: ${{ env.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
-          POSTGRES_DB: ${{ env.POSTGRES_DB }}
-        ports:
-          - 5432:5432
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install `sqlx-cli`
-        run: cargo install sqlx-cli --no-default-features --features $SQLX_FEATURES
-
-      - name: Run migrations
-        run: sqlx migrate run
-
-      - name: Check query metadata
-        run: sqlx prepare --check
-
   test:
     name: Test
 
-    needs: check-sqlx
-
     permissions:
       contents: read
 
@@ -81,11 +40,11 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install `sqlx-cli`
-        run: cargo install sqlx-cli --no-default-features --features $SQLX_FEATURES
+      - name: Install `sea-orm-cli`
+        run: cargo install sea-orm-cli
 
       - name: Run migrations
-        run: sqlx migrate run
+        run: sea-orm-cli migrate
 
       - name: Execute tests
         run: cargo test --all-features --all-targets
@@ -93,15 +52,10 @@ jobs:
   check:
     name: Check
 
-    needs: check-sqlx
-
     permissions:
       contents: read
 
     runs-on: ubuntu-latest
-
-    env:
-      SQLX_OFFLINE: true
 
     steps:
       - name: Checkout repository
@@ -120,8 +74,6 @@ jobs:
 
   format:
     name: Format
-
-    needs: check-sqlx
 
     permissions:
       contents: read
@@ -171,8 +123,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/vidhanio/scrimmy
-            registry.fly.io/scrimmy
+            ghcr.io/vidhanio/matchbox
+            registry.fly.io/matchbox
           tags: |
             type=ref,event=branch
             type=sha
@@ -214,7 +166,7 @@ jobs:
 
     environment:
       name: Development
-      url: https://fly.io/apps/scrimmy/monitoring
+      url: https://fly.io/apps/matchbox/monitoring
 
     runs-on: ubuntu-latest
 
@@ -236,10 +188,8 @@ jobs:
         run: >
           flyctl secrets set --stage
           DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN"
-          GUILDS="$GUILDS"
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          GUILDS: ${{ vars.GUILDS }}
 
       - name: Deploy to Fly.io
         run: flyctl deploy --remote-only

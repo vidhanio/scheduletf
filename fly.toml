@@ -1,16 +1,15 @@
-app = 'scrimmy'
+app = 'matchbox'
 primary_region = 'lax'
 
 [build]
-image = 'registry.fly.io/scrimmy:latest'
+image = 'registry.fly.io/matchbox:latest'
 
 [env]
-DATA_DIR = '/data'
 PRODUCTION = 'true'
 
 [[mounts]]
 destination = '/data'
-source = 'tailered_mlb_bot_data'
+source = 'matchbox_data'
 
 [[vm]]
 cpu_kind = 'shared'

@@ -13,5 +13,5 @@ RUN cargo build --release
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/target/release/scrimmy /usr/local/bin/
-ENTRYPOINT ["/usr/local/bin/scrimmy"]
+COPY --from=builder /app/target/release/matchbox /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/matchbox"]

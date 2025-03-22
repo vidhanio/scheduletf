@@ -1,13 +1,11 @@
-use serenity::all::{
-    ChannelId, ChannelType, CommandInteraction, Context, CreateInteractionResponse, Mentionable,
-};
-use serenity_commands::Command;
-use sqlx::query;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, IntoActiveModel};
+use serenity::all::{CommandInteraction, Context, CreateInteractionResponse};
+use serenity_commands::{Command, SubCommandGroup};
 
 use crate::{
-    models::GameFormat,
-    utils::{create_message, embed, success_embed},
     Bot, BotResult,
+    entities::team_guild::{GameFormat, ScheduleChannelId, ServemeApiKey},
+    utils::{create_message, success_embed},
 };
 
 #[derive(Debug, Command)]
@@ -15,24 +13,50 @@ pub enum ConfigCommand {
     /// Show the current configuration.
     Show,
 
-    /// Set the na.serveme.tf api key.
-    Serveme {
-        /// The na.serveme.tf API key.
-        api_key: Option<String>,
-    },
+    /// Set a configuration option.
+    Set(ConfigSetCommand),
 
-    /// Set the game format for this server.
-    GameFormat {
-        /// The game format.
-        game_format: Option<GameFormat>,
-    },
+    /// Unset a configuration option.
+    Unset(ConfigUnsetCommand),
+}
 
-    /// Set the games channel.
-    GamesChannel {
-        /// The games channel.
-        #[command(builder(channel_types(vec![ChannelType::Text])))]
-        games_channel: Option<ChannelId>,
-    },
+macro_rules! config_commands {
+    (
+        $(
+            $doc:literal
+            $name:ident { $field:ident : $field_ty:ty },
+        )*
+    ) => {
+        #[derive(Debug, SubCommandGroup)]
+        pub enum ConfigSetCommand {
+            $(
+                #[doc = concat!("Set the ", $doc, ".")]
+                $name {
+                    #[doc = concat!("The ", stringify!($doc), ".")]
+                    $field: $field_ty,
+                },
+            )*
+        }
+
+        #[derive(Debug, SubCommandGroup)]
+        pub enum ConfigUnsetCommand {
+            $(
+                #[doc = concat!("Unset the ", $doc, ".")]
+                $name,
+            )*
+        }
+    };
+}
+
+config_commands! {
+    "na.serveme.tf API key"
+    Serveme { key: ServemeApiKey },
+
+    "default game format"
+    GameFormat { format: GameFormat },
+
+    "schedule channel"
+    ScheduleChannel { channel: ScheduleChannelId },
 }
 
 impl ConfigCommand {
@@ -42,61 +66,67 @@ impl ConfigCommand {
         ctx: &Context,
         interaction: &CommandInteraction,
     ) -> BotResult {
-        let (guild, mut tx) = bot.get_guild_tx(interaction.guild_id).await?;
+        let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        let embed = match self {
+        let active_guild = match self {
             Self::Show => {
-                let fields = vec![
-                    (
-                        "na.serveme.tf API Key",
-                        guild
-                            .serveme_api_key
-                            .map(|_| format!("`{}`", "*".repeat(32))),
-                    ),
-                    (
-                        "Games Channel",
-                        guild.games_channel_id.map(|id| id.mention().to_string()),
-                    ),
-                ];
-
-                embed("Configuration").fields(fields.into_iter().map(|(name, value)| {
-                    (
-                        name.to_string(),
-                        value.unwrap_or_else(|| "Not set".to_string()),
-                        true,
+                interaction
+                    .create_response(
+                        &ctx,
+                        CreateInteractionResponse::Message(
+                            create_message().embed(guild.config_embed()),
+                        ),
                     )
-                }))
-            }
-            Self::Serveme { api_key } => {
-                query!(
-                    r#"UPDATE guilds SET serveme_api_key = $1
-                    WHERE id = $2"#,
-                    api_key,
-                    i64::from(guild.id),
-                )
-                .execute(&mut *tx)
-                .await?;
+                    .await?;
 
-                success_embed("na.serveme.tf API key set.")
+                return Ok(());
             }
-            Self::GamesChannel { games_channel } => {
-                query!(
-                    r#"UPDATE guilds SET games_channel_id = $1
-                    WHERE id = $2"#,
-                    games_channel.map(i64::from),
-                    i64::from(guild.id),
-                )
-                .execute(&mut *tx)
-                .await?;
+            Self::Set(cmd) => {
+                let mut guild = guild.into_active_model();
 
-                success_embed("Games channel set.")
+                match cmd {
+                    ConfigSetCommand::Serveme { key } => {
+                        guild.serveme_api_key.set_if_not_equals(Some(key));
+                    }
+                    ConfigSetCommand::GameFormat { format } => {
+                        guild.game_format.set_if_not_equals(Some(format));
+                    }
+                    ConfigSetCommand::ScheduleChannel { channel } => {
+                        guild.schedule_channel_id.set_if_not_equals(Some(channel));
+                    }
+                }
+
+                guild
+            }
+            Self::Unset(cmd) => {
+                let mut guild = guild.into_active_model();
+
+                match cmd {
+                    ConfigUnsetCommand::Serveme => {
+                        guild.serveme_api_key = Set(None);
+                    }
+                    ConfigUnsetCommand::GameFormat => {
+                        guild.game_format.set_if_not_equals(None);
+                    }
+                    ConfigUnsetCommand::ScheduleChannel => {
+                        guild.schedule_channel_id.set_if_not_equals(None);
+                        guild.schedule_message_id.set_if_not_equals(None);
+                    }
+                }
+
+                guild
             }
         };
+
+        let guild = active_guild.update(&tx).await?;
 
         interaction
             .create_response(
                 &ctx,
-                CreateInteractionResponse::Message(create_message().embed(embed)),
+                CreateInteractionResponse::Message(create_message().embeds(vec![
+                    success_embed("Configuration updated."),
+                    guild.config_embed(),
+                ])),
             )
             .await?;
 

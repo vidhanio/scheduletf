@@ -1,29 +1,21 @@
-mod cancel;
+mod add;
+mod delete;
 mod edit;
 mod host;
-mod join;
-mod show;
 
 use serenity::all::{CommandInteraction, Context};
 use serenity_commands::Command;
 
-use self::{
-    cancel::CancelCommand, edit::EditCommand, host::HostCommand, join::JoinCommand,
-    show::ShowCommand,
-};
+use self::{add::AddCommand, delete::DeleteCommand, edit::EditCommand, show::ShowCommand};
 use crate::{Bot, BotResult};
 
 #[derive(Debug, Command)]
-pub enum ScrimCommand {
-    /// Host a new scrim.
+pub enum OfficialCommand {
+    /// Add a new official match to the schedule.
     #[command(autocomplete)]
-    Host(HostCommand),
+    Add(AddCommand),
 
-    /// Join a scrim hosted by another team.
-    #[command(autocomplete)]
-    Join(JoinCommand),
-
-    /// Show the details of a scrim.
+    /// Show the details of an official match.
     #[command(autocomplete)]
     Show(ShowCommand),
 
@@ -31,12 +23,12 @@ pub enum ScrimCommand {
     #[command(autocomplete)]
     Edit(EditCommand),
 
-    /// Cancel an existing scrim.
+    /// Delete an official match from the schedule.
     #[command(autocomplete)]
-    Cancel(CancelCommand),
+    Delete(DeleteCommand),
 }
 
-impl ScrimCommand {
+impl OfficialCommand {
     pub async fn run(
         self,
         bot: &Bot,
@@ -44,16 +36,15 @@ impl ScrimCommand {
         interaction: &CommandInteraction,
     ) -> BotResult {
         match self {
-            Self::Host(cmd) => cmd.run(bot, ctx, interaction).await,
-            Self::Join(cmd) => cmd.run(bot, ctx, interaction).await,
+            Self::Add(cmd) => cmd.run(bot, ctx, interaction).await,
             Self::Show(cmd) => cmd.run(bot, ctx, interaction).await,
             Self::Edit(cmd) => cmd.run(bot, ctx, interaction).await,
-            Self::Cancel(cmd) => cmd.run(bot, ctx, interaction).await,
+            Self::Delete(cmd) => cmd.run(bot, ctx, interaction).await,
         }
     }
 }
 
-impl ScrimCommandAutocomplete {
+impl OfficialCommandAutocomplete {
     pub async fn autocomplete(
         self,
         bot: &Bot,
@@ -61,11 +52,10 @@ impl ScrimCommandAutocomplete {
         interaction: &CommandInteraction,
     ) -> BotResult {
         match self {
-            Self::Host(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
-            Self::Join(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::Add(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
             Self::Show(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
             Self::Edit(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
-            Self::Cancel(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::Delete(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
         }
     }
 }

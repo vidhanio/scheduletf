@@ -1,18 +1,17 @@
-name: scrimmy
+name: matchbox
 
 services:
   bot:
-    container_name: scrimmy-bot
-    image: ghcr.io/vidhanio/scrimmy:latest
+    container_name: matchbox-bot
+    image: ghcr.io/vidhanio/matchbox:latest
     build: .
     environment:
       DISCORD_BOT_TOKEN: $DISCORD_BOT_TOKEN
       GUILDS: $GUILDS
-      CHANNELS: $CHANNELS
       DATABASE_URL: postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@database:5432/$POSTGRES_DB
 
   database:
-    container_name: scrimmy-database
+    container_name: matchbox-database
     image: postgres
     environment:
       POSTGRES_USER: $POSTGRES_USER
@@ -24,8 +23,8 @@ services:
       - 5432:5432
 networks:
   default:
-    name: scrimmy-network
+    name: matchbox-network
 volumes:
   database:
-    name: scrimmy-database
+    name: matchbox-database
     driver: local

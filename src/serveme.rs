@@ -1,31 +1,34 @@
-use std::{
-    collections::HashMap,
-    fmt::{self, Display, Formatter},
-    str::FromStr,
-};
+use std::sync::{Arc, LazyLock};
 
-use reqwest::{header::AUTHORIZATION, StatusCode};
+use moka::future::Cache;
+use reqwest::{StatusCode, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
-use serenity::all::CreateCommandOption;
-use serenity_commands::BasicOption;
 use time::OffsetDateTime;
 
-use crate::{error::BotError, models::Map, BotResult};
+use crate::{
+    BotResult, HTTP_CLIENT,
+    entities::{
+        game::{ConnectInfo, Map, ReservationId},
+        team_guild::{GameFormat, ServemeApiKey},
+    },
+};
+
+static SERVEME_RESERVATION_CACHE: LazyLock<Cache<ReservationId, Arc<ReservationResponse>>> =
+    LazyLock::new(|| {
+        Cache::builder()
+            .time_to_live(std::time::Duration::from_secs(10))
+            .build()
+    });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReservationWrapper<T> {
-    pub reservation: T,
+struct ReservationWrapper<T> {
+    reservation: T,
 }
 
 impl<T> From<T> for ReservationWrapper<T> {
     fn from(reservation: T) -> Self {
         Self { reservation }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReservationError {
-    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,28 +41,22 @@ pub struct FindServersRequest {
 }
 
 impl FindServersRequest {
-    pub async fn send(
-        &self,
-        client: &reqwest::Client,
-        api_key: &str,
-    ) -> BotResult<FindServersResponse> {
-        client
+    pub async fn send(&self, api_key: &ServemeApiKey) -> BotResult<FindServersResponse> {
+        Ok(HTTP_CLIENT
             .post("https://na.serveme.tf/api/reservations/find_servers")
-            .header(AUTHORIZATION, format!("Token token={api_key}"))
+            .header(AUTHORIZATION, api_key.auth_header())
             .json(&ReservationWrapper::from(self))
             .send()
             .await?
             .error_for_status()?
             .json()
-            .await
-            .map_err(Into::into)
+            .await?)
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FindServersResponse {
     pub servers: Vec<Server>,
-    pub server_configs: Vec<ServerConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,8 +72,35 @@ pub struct ServerConfig {
     pub file: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct GetReservationRequest;
+
+impl GetReservationRequest {
+    pub async fn send(
+        api_key: &ServemeApiKey,
+        reservation_id: ReservationId,
+    ) -> BotResult<Arc<ReservationResponse>> {
+        Ok(SERVEME_RESERVATION_CACHE
+            .try_get_with(reservation_id, async {
+                Ok(HTTP_CLIENT
+                    .get(format!(
+                        "https://na.serveme.tf/api/reservations/{reservation_id}"
+                    ))
+                    .header(AUTHORIZATION, api_key.auth_header())
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<ReservationWrapper<ReservationResponse>>()
+                    .await?
+                    .reservation
+                    .into())
+            })
+            .await?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
-pub struct ReservationRequest {
+pub struct CreateReservationRequest {
     #[serde(with = "time::serde::iso8601")]
     pub starts_at: OffsetDateTime,
 
@@ -94,26 +118,24 @@ pub struct ReservationRequest {
     pub enable_demos_tf: bool,
 }
 
-impl ReservationRequest {
-    pub async fn send(
-        &self,
-        client: &reqwest::Client,
-        api_key: &str,
-    ) -> BotResult<ReservationResponse> {
-        let reservation = client
-            .post("https://na.serveme.tf/api/reservations")
-            .header(AUTHORIZATION, format!("Token token={api_key}"))
-            .json(&ReservationWrapper::from(self))
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ReservationWrapper<ReservationResponse>>()
-            .await?
-            .reservation;
+impl CreateReservationRequest {
+    pub async fn send(&self, api_key: &ServemeApiKey) -> BotResult<Arc<ReservationResponse>> {
+        let reservation = Arc::new(
+            HTTP_CLIENT
+                .post("https://na.serveme.tf/api/reservations")
+                .header(AUTHORIZATION, api_key.auth_header())
+                .json(&ReservationWrapper::from(self))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<ReservationWrapper<ReservationResponse>>()
+                .await?
+                .reservation,
+        );
 
-        if let Some(errors) = reservation.errors {
-            return Err(BotError::ServemeReservation(errors));
-        }
+        SERVEME_RESERVATION_CACHE
+            .insert(reservation.id, Arc::clone(&reservation))
+            .await;
 
         Ok(reservation)
     }
@@ -121,39 +143,49 @@ impl ReservationRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EditReservationRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::iso8601::option"
+    )]
     pub starts_at: Option<OffsetDateTime>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::iso8601::option"
+    )]
     pub ends_at: Option<OffsetDateTime>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub first_map: Option<Map>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub server_config_id: Option<u32>,
 }
 
 impl EditReservationRequest {
     pub async fn send(
         &self,
-        client: &reqwest::Client,
-        api_key: &str,
-        reservation_id: u32,
-    ) -> BotResult<ReservationResponse> {
-        let reservation = client
-            .patch(format!(
-                "https://na.serveme.tf/api/reservations/{reservation_id}"
-            ))
-            .header(AUTHORIZATION, format!("Token token={api_key}"))
-            .json(&ReservationWrapper::from(self))
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ReservationWrapper<ReservationResponse>>()
-            .await?
-            .reservation;
+        api_key: &ServemeApiKey,
+        reservation_id: ReservationId,
+    ) -> BotResult<Arc<ReservationResponse>> {
+        let reservation = Arc::new(
+            HTTP_CLIENT
+                .patch(format!(
+                    "https://na.serveme.tf/api/reservations/{reservation_id}"
+                ))
+                .header(AUTHORIZATION, api_key.auth_header())
+                .json(&ReservationWrapper::from(self))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<ReservationWrapper<ReservationResponse>>()
+                .await?
+                .reservation,
+        );
 
-        if let Some(errors) = reservation.errors {
-            return Err(BotError::ServemeReservation(errors));
-        }
+        SERVEME_RESERVATION_CACHE
+            .insert(reservation.id, Arc::clone(&reservation))
+            .await;
 
         Ok(reservation)
     }
@@ -164,18 +196,19 @@ pub struct DeleteReservationRequest;
 
 impl DeleteReservationRequest {
     pub async fn send(
-        client: &reqwest::Client,
-        api_key: &str,
-        reservation_id: u32,
+        api_key: &ServemeApiKey,
+        reservation_id: ReservationId,
     ) -> BotResult<Option<ReservationResponse>> {
-        let resp = client
+        let resp = HTTP_CLIENT
             .delete(format!(
                 "https://na.serveme.tf/api/reservations/{reservation_id}"
             ))
-            .header(AUTHORIZATION, format!("Token token={api_key}"))
+            .header(AUTHORIZATION, api_key.auth_header())
             .send()
             .await?
             .error_for_status()?;
+
+        SERVEME_RESERVATION_CACHE.invalidate(&reservation_id).await;
 
         if resp.status() == StatusCode::NO_CONTENT {
             Ok(None)
@@ -185,19 +218,14 @@ impl DeleteReservationRequest {
                 .await?
                 .reservation;
 
-            #[allow(clippy::option_if_let_else)]
-            if let Some(errors) = reservation.errors {
-                Err(BotError::ServemeReservation(errors))
-            } else {
-                Ok(Some(reservation))
-            }
+            Ok(Some(reservation))
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReservationResponse {
-    pub id: u32,
+    pub id: ReservationId,
     pub status: String,
     #[serde(with = "time::serde::iso8601")]
     pub starts_at: OffsetDateTime,
@@ -206,7 +234,6 @@ pub struct ReservationResponse {
     pub password: String,
     pub rcon: String,
     pub server: Server,
-    pub errors: Option<HashMap<String, ReservationError>>,
 }
 
 impl ReservationResponse {
@@ -216,88 +243,43 @@ impl ReservationResponse {
             password: self.password.clone(),
         }
     }
-
-    pub fn reservation_url(&self) -> String {
-        format!("https://na.serveme.tf/reservations/{}", self.id)
-    }
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnectInfo {
-    pub ip_and_port: String,
-    pub password: String,
-}
+pub struct MapsRequest;
 
-impl BasicOption for ConnectInfo {
-    fn create_option(
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> CreateCommandOption {
-        String::create_option(name, description)
-    }
+impl MapsRequest {
+    pub async fn send(
+        api_key: &ServemeApiKey,
+        format: Option<GameFormat>,
+    ) -> BotResult<Arc<[Map]>> {
+        static MAPS_CACHE: LazyLock<Cache<Option<GameFormat>, Arc<[Map]>>> = LazyLock::new(|| {
+            Cache::builder()
+                .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
+                .build()
+        });
 
-    fn from_value(
-        value: Option<&serenity::model::prelude::CommandDataOptionValue>,
-    ) -> serenity_commands::Result<Self> {
-        let value = String::from_value(value)?;
-
-        value
-            .parse()
-            .map_err(|err| serenity_commands::Error::Custom(Box::new(err)))
-    }
-}
-
-impl ConnectInfo {
-    pub fn connect_command(&self) -> String {
-        self.to_string()
-    }
-
-    pub fn connect_url(&self) -> String {
-        format!("steam://connect/{}/{}", self.ip_and_port, self.password)
-    }
-}
-
-impl Display for ConnectInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "connect {}; password \"{}\"",
-            self.ip_and_port, self.password
-        )
-    }
-}
-
-impl FromStr for ConnectInfo {
-    type Err = BotError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (mut ip_and_port, s) = s
-            .trim_start()
-            .strip_prefix("connect")
-            .ok_or(BotError::InvalidConnectInfo)?
-            .trim_start()
-            .split_once(';')
-            .ok_or(BotError::InvalidConnectInfo)?;
-
-        ip_and_port = ip_and_port.trim_end();
-
-        if ip_and_port.starts_with('"') && ip_and_port.ends_with('"') && ip_and_port.len() > 1 {
-            ip_and_port = &ip_and_port[1..ip_and_port.len() - 1];
+        #[derive(Deserialize)]
+        struct MapsResponse {
+            maps: Vec<Map>,
         }
 
-        let mut password = s
-            .trim_start()
-            .strip_prefix("password")
-            .ok_or(BotError::InvalidConnectInfo)?
-            .trim();
+        Ok(MAPS_CACHE
+            .try_get_with(format, async {
+                let mut maps = HTTP_CLIENT
+                    .get("https://na.serveme.tf/api/maps")
+                    .header(AUTHORIZATION, api_key.auth_header())
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<MapsResponse>()
+                    .await?
+                    .maps;
 
-        if password.starts_with('"') && password.ends_with('"') && password.len() > 1 {
-            password = &password[1..password.len() - 1];
-        }
+                maps.sort_by(|a, b| a.cmp_with_format(b, format));
 
-        Ok(Self {
-            ip_and_port: ip_and_port.to_owned(),
-            password: password.to_owned(),
-        })
+                Ok(maps.into())
+            })
+            .await?)
     }
 }

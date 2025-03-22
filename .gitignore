@@ -1,6 +1,9 @@
 # File created using '.gitignore Generator' for Visual Studio Code: https://bit.ly/vscode-gig
-# Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,rust
-# Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,macos,rust
+# Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,dotenv,rust
+# Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,macos,dotenv,rust
+
+### dotenv ###
+.env
 
 ### macOS ###
 # General
@@ -69,7 +72,7 @@ Cargo.lock
 .history
 .ionide
 
-# End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,rust
+# End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,dotenv,rust
 
 # Custom rules (everything added below won't be overriden by 'Generate .gitignore File' if you use 'Update' option)
 

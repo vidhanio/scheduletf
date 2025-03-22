@@ -1,325 +1,388 @@
-use serenity::all::{CommandInteraction, Context, CreateInteractionResponse, UserId};
-use serenity_commands::SubCommandGroup;
-use sqlx::{query, query_as};
+use paste::paste;
+use sea_orm::{ActiveModelTrait, DatabaseTransaction, EntityTrait, IntoActiveModel, QuerySelect};
+use serenity::all::{CommandInteraction, Context, EditInteractionResponse, UserId};
+use serenity_commands::{SubCommand, SubCommandGroup};
 use time::OffsetDateTime;
 
 use crate::{
-    error::BotError,
-    models::{DbScrim, GameFormat, Map, NextDay, Scrim, ServerInfo, Time},
-    serveme::ConnectInfo,
-    utils::success_message,
     Bot, BotResult,
+    entities::{
+        game::{self, ConnectInfo, Maps, ReservationId},
+        team_guild::{self, GameFormat},
+    },
+    error::BotError,
+    utils::success_embed,
 };
 
-#[derive(Clone, Debug, SubCommandGroup)]
-pub enum EditCommand {
-    /// Edit the date and time of the scrim.
+macro_rules! edit_command {
+    (
+        $(
+            $doc:literal
+            $name:ident {
+                $(#[$attr:meta])*
+                $field:ident : $field_ty:ty,
+            },
+        )*
+    ) => {
+        paste! {
+            #[derive(Debug, SubCommandGroup)]
+            pub enum EditCommand {
+                $(
+                    #[doc = concat!("Edit the ", $doc, ".")]
+                    #[command(autocomplete)]
+                    $name([<Edit $name Command>]),
+                )*
+            }
+
+            $(
+                #[derive(Debug, SubCommand)]
+                pub struct [<Edit $name Command>] {
+                    /// The scrim to edit.
+                    #[command(autocomplete)]
+                    scrim: OffsetDateTime,
+
+                    #[doc = concat!("The new ", $doc, ".")]
+                    $(#[$attr])*
+                    $field: $field_ty,
+                }
+            )*
+
+            impl EditCommand {
+                #[allow(clippy::too_many_lines)]
+                pub async fn run(
+                    self,
+                    bot: &Bot,
+                    ctx: &Context,
+                    interaction: &CommandInteraction,
+                ) -> BotResult {
+                    interaction.defer_ephemeral(ctx).await?;
+
+                    let (mut guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
+
+                    let datetime = match &self {
+                        $(
+                            Self::$name(cmd) => cmd.scrim,
+                        )*
+                    };
+
+                    let game = guild.get_game(&tx, datetime).await?;
+
+                    let game = match self {
+                        $(
+                            Self::$name(cmd) => {
+                                cmd.run(&tx, &guild, game).await?
+                            }
+                        )*
+                    };
+
+                    let embed = game.embed(guild.serveme_api_key.as_ref()).await?;
+
+                    guild.refresh_schedule(ctx, &tx).await?;
+
+                    tx.commit().await?;
+
+                    interaction
+                        .edit_response(
+                            &ctx,
+                            EditInteractionResponse::new()
+                                .embeds(vec![
+                                    success_embed("Scrim updated."),
+                                    embed,
+                                ]),
+                        )
+                        .await?;
+
+                    Ok(())
+                }
+            }
+        }
+    };
+}
+
+edit_command! {
+    "date and time of the scrim"
     DateTime {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// The new day the scrim is scheduled for.
-        new_day: NextDay,
-
-        /// The new time the scrim is scheduled for.
-        new_time: Time,
+        #[command(autocomplete)]
+        date_time: OffsetDateTime,
     },
 
-    /// Edit the opposing team's contact.
+    "opposing team's contact"
     Opponent {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// The opposing team's contact. Enter their user ID if they are not in
-        /// the server.
         opponent: UserId,
     },
 
-    /// Edit the game format of the scrim.
+    "game format of the scrim"
     GameFormat {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// The game format of the scrim.
         game_format: GameFormat,
     },
 
-    /// Edit the first map to be played.
-    #[command(name = "map-1")]
-    Map1 {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// The first map to be played.
-        map: Option<Map>,
+    "maps to be played"
+    Maps {
+        #[command(autocomplete)]
+        maps: Option<Maps>,
     },
 
-    /// Edit the second map to be played.
-    #[command(name = "map-2")]
-    Map2 {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// The second map to be played.
-        map: Option<Map>,
-    },
-
-    /// Edit the existing reservation to set up and modify.
+    "reservation ID of the server"
     ReservationId {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// An existing reservation to set up and modify. If not provided, a new
-        /// reservation will be created.
-        reservation_id: Option<u32>,
+        #[command(autocomplete)]
+        reservation_id: Option<ReservationId>,
     },
 
-    /// Edit the external connect info, if they host.
+    "external connect info, if they are hosting"
     ConnectInfo {
-        /// The day of the week the scrim is scheduled for.
-        day: NextDay,
-
-        /// The time the scrim is scheduled for.
-        time: Time,
-
-        /// External connect info, if they host. If originally hosted, this will
-        /// cancel the reservation.
         connect_info: Option<ConnectInfo>,
     },
 }
 
-impl EditCommand {
-    fn timestamp(&self) -> OffsetDateTime {
-        let (day, time) = match self {
-            Self::DateTime { day, time, .. }
-            | Self::Opponent { day, time, .. }
-            | Self::GameFormat { day, time, .. }
-            | Self::Map1 { day, time, .. }
-            | Self::Map2 { day, time, .. }
-            | Self::ReservationId { day, time, .. }
-            | Self::ConnectInfo { day, time, .. } => (day, time),
-        };
+impl EditDateTimeCommand {
+    pub async fn run(
+        self,
+        tx: &DatabaseTransaction,
+        _: &team_guild::Model,
+        game: game::Model,
+    ) -> BotResult<game::Model> {
+        let mut game = game.into_active_model();
 
-        day.to_datetime(*time)
+        game.timestamp.set_if_not_equals(self.date_time);
+
+        Ok(game.update(tx).await?)
     }
 }
 
-impl EditCommand {
-    #[allow(clippy::too_many_lines)]
+impl EditOpponentCommand {
     pub async fn run(
+        self,
+        tx: &DatabaseTransaction,
+        _: &team_guild::Model,
+        game: game::Model,
+    ) -> BotResult<game::Model> {
+        let mut game = game.into_active_model();
+
+        game.opponent_user_id
+            .set_if_not_equals(self.opponent.into());
+
+        Ok(game.update(tx).await?)
+    }
+}
+
+impl EditGameFormatCommand {
+    pub async fn run(
+        self,
+        tx: &DatabaseTransaction,
+        _: &team_guild::Model,
+        game: game::Model,
+    ) -> BotResult<game::Model> {
+        let mut game = game.into_active_model();
+
+        game.game_format.set_if_not_equals(self.game_format);
+
+        Ok(game.update(tx).await?)
+    }
+}
+
+impl EditMapsCommand {
+    pub async fn run(
+        self,
+        tx: &DatabaseTransaction,
+        guild: &team_guild::Model,
+        mut game: game::Model,
+    ) -> BotResult<game::Model> {
+        game.maps = Some(self.maps.unwrap_or_default());
+
+        if game.reservation_id.is_some() {
+            let api_key = guild.serveme_api_key()?;
+
+            game.edit_reservation(api_key).await?;
+        }
+
+        let mut game = game.into_active_model();
+
+        game.maps.reset();
+
+        Ok(game.update(tx).await?)
+    }
+}
+
+impl EditReservationIdCommand {
+    pub async fn run(
+        self,
+        tx: &DatabaseTransaction,
+        guild: &team_guild::Model,
+        mut game: game::Model,
+    ) -> BotResult<game::Model> {
+        game.reservation_id = self.reservation_id;
+
+        if game.reservation_id.is_some() {
+            let api_key = guild.serveme_api_key()?;
+
+            game.edit_reservation(api_key).await?;
+        }
+
+        let mut game = game.into_active_model();
+
+        game.reservation_id.reset();
+        game.server_ip_and_port.set_if_not_equals(None);
+        game.server_password.set_if_not_equals(None);
+
+        Ok(game.update(tx).await?)
+    }
+}
+
+impl EditConnectInfoCommand {
+    pub async fn run(
+        self,
+        tx: &DatabaseTransaction,
+        _: &team_guild::Model,
+        game: game::Model,
+    ) -> BotResult<game::Model> {
+        let mut game = game.into_active_model();
+
+        game.reservation_id.set_if_not_equals(None);
+
+        let (ip_and_port, password) = self
+            .connect_info
+            .map(|connect_info| (connect_info.ip_and_port, connect_info.password))
+            .unzip();
+
+        game.server_ip_and_port.set_if_not_equals(ip_and_port);
+        game.server_password.set_if_not_equals(password);
+
+        Ok(game.update(tx).await?)
+    }
+}
+
+impl EditCommandAutocomplete {
+    pub async fn autocomplete(
         self,
         bot: &Bot,
         ctx: &Context,
         interaction: &CommandInteraction,
     ) -> BotResult {
-        let (guild, mut tx) = bot.get_guild_tx(interaction.guild_id).await?;
+        match self {
+            Self::DateTime(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::Opponent(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::GameFormat(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::Maps(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::ReservationId(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::ConnectInfo(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+        }
+    }
+}
 
-        let timestamp = self.timestamp();
+macro_rules! impl_autocomplete_scrim {
+    ($($name:ident),*) => {
+        paste! {
+            $(
+                impl [<Edit $name CommandAutocomplete>] {
+                    pub async fn autocomplete(
+                        self,
+                        bot: &Bot,
+                        ctx: &Context,
+                        interaction: &CommandInteraction,
+                    ) -> BotResult {
+                        let Self::Scrim { scrim, .. } = self;
 
-        let mut edited_reservation = false;
+                        let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        let scrim = match self {
-            Self::DateTime {
-                new_day, new_time, ..
-            } => {
-                edited_reservation = true;
+                        guild.
+                            autocomplete_games(
+                                ctx,
+                                interaction,
+                                tx,
+                                &scrim,
+                            )
+                            .await
+                    }
+                }
+            )*
+        }
+    };
+}
 
-                let new_timestamp = new_day.to_datetime(new_time);
-                query_as!(
-                    DbScrim,
-                    "UPDATE scrims SET timestamp = $1
-                    WHERE guild_id = $2 AND timestamp = $3
-                    RETURNING *",
-                    new_timestamp,
-                    i64::from(guild.id),
-                    timestamp,
-                )
-                .fetch_one(&mut *tx)
-                .await?
-                .into()
+impl_autocomplete_scrim!(Opponent, GameFormat, ConnectInfo);
+
+impl EditDateTimeCommandAutocomplete {
+    pub async fn autocomplete(
+        self,
+        bot: &Bot,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+    ) -> BotResult {
+        match self {
+            Self::Scrim { scrim, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
+
+                guild.autocomplete_games(ctx, interaction, tx, &scrim).await
             }
+            Self::DateTime { date_time, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-            Self::Opponent { opponent, .. } => query_as!(
-                DbScrim,
-                "UPDATE scrims SET opponent_user_id = $1
-                    WHERE guild_id = $2 AND timestamp = $3
-                    RETURNING *",
-                i64::from(opponent),
-                i64::from(guild.id),
-                timestamp,
-            )
-            .fetch_one(&mut *tx)
-            .await?
-            .into(),
-
-            Self::GameFormat { game_format, .. } => {
-                edited_reservation = true;
-
-                query_as!(
-                    DbScrim,
-                    "UPDATE scrims SET game_format = $1
-                    WHERE guild_id = $2 AND timestamp = $3
-                    RETURNING *",
-                    i16::from(game_format),
-                    i64::from(guild.id),
-                    timestamp,
-                )
-                .fetch_one(&mut *tx)
-                .await?
-                .into()
+                guild
+                    .autocomplete_times(ctx, interaction, tx, &date_time)
+                    .await
             }
+        }
+    }
+}
 
-            Self::Map1 { map, .. } => {
-                edited_reservation = true;
+impl EditMapsCommandAutocomplete {
+    pub async fn autocomplete(
+        self,
+        bot: &Bot,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+    ) -> BotResult {
+        match self {
+            Self::Scrim { scrim, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-                query_as!(
-                    DbScrim,
-                    "UPDATE scrims SET map_1 = $1
-                    WHERE guild_id = $2 AND timestamp = $3
-                    RETURNING *",
-                    map.as_ref().map(Map::as_str),
-                    i64::from(guild.id),
-                    timestamp,
-                )
-                .fetch_one(&mut *tx)
-                .await?
-                .into()
+                guild.autocomplete_games(ctx, interaction, tx, &scrim).await
             }
-            Self::Map2 { map, .. } => query_as!(
-                DbScrim,
-                "UPDATE scrims SET map_2 = $1
-                    WHERE guild_id = $2 AND timestamp = $3
-                    RETURNING *",
-                map.as_ref().map(Map::as_str),
-                i64::from(guild.id),
-                timestamp,
-            )
-            .fetch_one(&mut *tx)
-            .await?
-            .into(),
-            Self::ReservationId { reservation_id, .. } => {
-                let mut scrim = Scrim::from(
-                    query_as!(
-                        DbScrim,
-                        "SELECT * FROM scrims
-                        WHERE guild_id = $1 AND timestamp = $2",
-                        i64::from(guild.id),
-                        timestamp,
-                    )
-                    .fetch_one(&mut *tx)
-                    .await?,
-                );
+            Self::Maps { maps, scrim, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-                if let Some(serveme_api_key) = &guild.serveme_api_key {
-                    let reservation = if let Some(reservation_id) = reservation_id {
-                        bot.edit_serveme_reservation(serveme_api_key, &scrim, reservation_id)
+                let game_format = if let Some(datetime) = scrim.into_value() {
+                    Some(
+                        game::Entity::find_by_id((guild.id, datetime))
+                            .select_only()
+                            .column(game::Column::GameFormat)
+                            .into_tuple::<GameFormat>()
+                            .one(&tx)
                             .await?
-                    } else {
-                        bot.new_serveme_reservation(serveme_api_key, &scrim).await?
-                    };
-
-                    let connect_info = reservation.connect_info();
-
-                    query!(
-                        "UPDATE scrims SET reservation_id = $1, serveme_rcon = $2, ip_and_port = $3, password = $4
-                        WHERE guild_id = $5 AND timestamp = $6",
-                        reservation.id as i32,
-                        &reservation.rcon,
-                        &connect_info.ip_and_port,
-                        &connect_info.password,
-                        i64::from(guild.id),
-                        timestamp,
+                            .ok_or(BotError::GameNotFound)?,
                     )
-                    .execute(&mut *tx)
-                    .await?;
-
-                    scrim.server_info = Some(ServerInfo::Serveme {
-                        reservation_id: reservation.id,
-                        rcon_password: reservation.rcon,
-                        connect_info,
-                    });
-
-                    scrim
                 } else {
-                    return Err(BotError::NoServemeApiKey);
-                }
-            }
-            Self::ConnectInfo { connect_info, .. } => {
-                let scrim = Scrim::from(
-                    query_as!(
-                        DbScrim,
-                        "UPDATE scrims SET reservation_id = NULL, serveme_rcon = NULL, ip_and_port = $1, password = $2
-                        WHERE guild_id = $3 AND timestamp = $4
-                        RETURNING *",
-                        connect_info.as_ref().map(|info| &info.ip_and_port),
-                        connect_info.as_ref().map(|info| &info.password),
-                        i64::from(guild.id),
-                        timestamp,
-                    )
-                    .fetch_one(&mut *tx)
-                    .await?
-                );
+                    None
+                };
 
-                if let Some((serveme_api_key, reservation_id)) =
-                    guild.serveme_api_key.as_ref().zip(scrim.reservation_id())
-                {
-                    bot.delete_serveme_reservation(serveme_api_key, reservation_id)
-                        .await?;
-                }
-
-                scrim
-            }
-        };
-
-        if edited_reservation {
-            if let Some((serveme_api_key, reservation_id)) =
-                guild.serveme_api_key.as_ref().zip(scrim.reservation_id())
-            {
-                bot.edit_serveme_reservation(serveme_api_key, &scrim, reservation_id)
-                    .await?;
+                guild
+                    .autocomplete_maps(ctx, interaction, game_format, &maps)
+                    .await
             }
         }
+    }
+}
 
-        guild
-            .id
-            .edit_scheduled_event(ctx, scrim.event_id, scrim.edit_event())
-            .await?;
+impl EditReservationIdCommandAutocomplete {
+    pub async fn autocomplete(
+        self,
+        bot: &Bot,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+    ) -> BotResult {
+        match self {
+            Self::Scrim { scrim, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        if let Some((games_channel, message_id)) = guild.games_channel_id.zip(scrim.message_id) {
-            games_channel
-                .edit_message(&ctx, message_id, scrim.edit_message())
-                .await?;
+                guild.autocomplete_games(ctx, interaction, tx, &scrim).await
+            }
+            Self::ReservationId { reservation_id, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
+
+                guild
+                    .autocomplete_reservations(ctx, interaction, tx, &reservation_id)
+                    .await
+            }
         }
-
-        tx.commit().await?;
-
-        interaction
-            .create_response(
-                &ctx,
-                CreateInteractionResponse::Message(
-                    success_message("Scrim edited.").add_embed(scrim.embed()),
-                ),
-            )
-            .await?;
-
-        Ok(())
     }
 }

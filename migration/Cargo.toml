@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+name = "migration"
+publish = false
+version = "0.1.0"
+
+[lib]
+name = "migration"
+path = "src/lib.rs"
+
+[dependencies]
+sea-orm-migration = { version = "1", features = [
+    "runtime-tokio-rustls",
+    "sqlx-postgres",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

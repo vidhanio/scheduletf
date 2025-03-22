@@ -1,12 +1,17 @@
 mod config;
+// mod official;
+mod refresh;
 mod scrim;
 
-use serenity::all::{CommandInteraction, Context, Permissions};
+use serenity::all::{
+    CommandInteraction, Context, InstallationContext, InteractionContext, Permissions,
+    ResolvedTarget,
+};
 use serenity_commands::Commands;
 use tracing::instrument;
 
-use self::{config::ConfigCommand, scrim::ScrimCommand};
-use crate::{Bot, BotResult};
+use self::{config::ConfigCommand, refresh::RefreshCommand, scrim::ScrimCommand};
+use crate::{Bot, BotResult, error::BotError, rgl::RglProfile};
 
 #[derive(Debug, Commands)]
 pub enum AllCommands {
@@ -15,12 +20,33 @@ pub enum AllCommands {
     Config(ConfigCommand),
 
     /// Manage scrims.
-    #[command(builder(default_member_permissions(Permissions::MANAGE_GUILD)))]
+    #[command(
+        autocomplete,
+        builder(default_member_permissions(Permissions::MANAGE_GUILD))
+    )]
     Scrim(ScrimCommand),
+
+    // /// Manage official matches.
+    // #[command(
+    //     autocomplete,
+    //     builder(default_member_permissions(Permissions::MANAGE_GUILD))
+    // )]
+    // Official(OfficialCommand),
+    /// Refresh the schedule.
+    Refresh(RefreshCommand),
+
+    #[command(name = "RGL.gg Profile", context_menu = "user")]
+    #[command(builder(
+        add_integration_type(InstallationContext::User),
+        contexts(vec![
+            InteractionContext::Guild,
+            InteractionContext::PrivateChannel,
+        ])
+    ))]
+    RglProfile,
 }
 
 impl AllCommands {
-    #[instrument(skip(self), err)]
     pub async fn run(
         self,
         bot: &Bot,
@@ -30,6 +56,40 @@ impl AllCommands {
         match self {
             Self::Config(cmd) => cmd.run(bot, ctx, interaction).await,
             Self::Scrim(cmd) => cmd.run(bot, ctx, interaction).await,
+            // Self::Official(cmd) => cmd.run(bot, ctx, interaction).await,
+            Self::Refresh(cmd) => cmd.run(bot, ctx, interaction).await,
+            Self::RglProfile => {
+                let ResolvedTarget::User(user, _) = interaction
+                    .data
+                    .target()
+                    .ok_or(BotError::InvalidInteractionTarget)?
+                else {
+                    return Err(BotError::InvalidInteractionTarget);
+                };
+
+                interaction.defer_ephemeral(ctx).await?;
+
+                interaction
+                    .edit_response(ctx, RglProfile::get_from_discord(user.id).await?.response())
+                    .await?;
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl AllCommandsAutocomplete {
+    #[instrument(skip(self), err)]
+    pub async fn autocomplete(
+        self,
+        bot: &Bot,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+    ) -> BotResult {
+        match self {
+            Self::Scrim(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            // Self::Official(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
         }
     }
 }

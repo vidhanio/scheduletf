@@ -1,87 +1,89 @@
-use std::{collections::HashMap, io};
+use std::{io, sync::Arc};
 
 use thiserror::Error;
-use time::OffsetDateTime;
-
-use crate::{
-    serveme::ReservationError,
-    utils::{ComponentInteractionDataType, ScrimOffsetExtension},
-};
 
 #[derive(Debug, Error)]
 pub enum BotError {
-    #[error("io error: `{0}`")]
+    #[error("`io` error: `{0}`")]
     Io(#[from] io::Error),
 
-    #[error("parse int error: `{0}`")]
+    #[error("Integer parsing error: `{0}`")]
     ParseInt(#[from] std::num::ParseIntError),
 
-    #[error("http error: `{0}`")]
+    #[error("HTTP error: `{0}`")]
     Http(#[from] reqwest::Error),
 
-    #[error("json error: `{0}`")]
+    #[error("JSON error: `{0}`")]
     Json(#[from] serde_json::Error),
 
-    #[error("database error: `{0}`")]
-    Database(#[from] sqlx::Error),
+    #[error("Database error: `{0}`")]
+    Database(#[from] sea_orm::error::DbErr),
 
-    #[error("tokio task join error: `{0}`")]
+    #[error("Tokio task join error: `{0}`")]
     TokioJoin(#[from] tokio::task::JoinError),
 
-    #[error("serenity error: `{0}`")]
-    Serenity(#[from] serenity::Error),
+    #[error("Serenity error: `{0}`")]
+    Serenity(#[source] Box<serenity::Error>),
 
-    #[error("command parse error: `{0}`")]
+    #[error("Command parsing error: `{0}`")]
     CommandParse(#[from] serenity_commands::Error),
 
-    #[error("time parse error: `{0}`")]
+    #[error("Time parsing error: `{0}`")]
     TimeParse(#[from] time::error::Parse),
 
-    #[error("component range error: `{0}`")]
-    ComponentRange(#[from] time::error::ComponentRange),
-
-    #[error("no guild associated with interaction")]
+    #[error("No guild associated with interaction.")]
     NoGuild,
 
-    #[error("na.serveme.tf reservation error(s):\n```\n{0:?}\n```")]
-    ServemeReservation(HashMap<String, ReservationError>),
-
-    #[error("no na.serveme.tf servers found")]
+    #[error("No `na.serveme.tf` servers found.")]
     NoServemeServers,
 
-    #[error("na.serveme.tf config for gamemode not found")]
-    NoServemeConfigFound,
-
-    #[error("na.serveme.tf api key not set. run `/config serveme` to set it.")]
+    #[error("`na.serveme.tf` API key not set. Run `/config set serveme` to set it.")]
     NoServemeApiKey,
 
-    #[error("connect info is invalid")]
-    InvalidConnectInfo,
+    #[error("Invalid connect command.")]
+    InvalidConnectCommand,
 
-    #[error("scrim already scheduled at `{}`", .0.short_date())]
-    ScrimAlreadyScheduled(OffsetDateTime),
+    #[error("Game already scheduled for that time.")]
+    GameAlreadyScheduled,
 
-    #[error("scrim not hosted: `{}`", .0.short_date())]
-    ScrimNotHosted(OffsetDateTime),
+    #[error("Game not found.")]
+    GameNotFound,
+
+    #[error("Invalid match info.")]
+    InvalidMatchInfo,
+
+    #[error("Invalid server info.")]
+    InvalidServerInfo,
+
+    #[error("No reservation ID provided.")]
+    NoReservationId,
 
     #[error(
-        "incorrect interaction data kind for `{component}`: expected `{expected:?}`, got `{got:?}`"
+        "No game format provided. Either set a default game format with `/config set game-format` or provide one in the command."
     )]
-    IncorrectInteractionDataKind {
-        component: String,
-        expected: ComponentInteractionDataType,
-        got: ComponentInteractionDataType,
-    },
+    NoGameFormat,
 
-    #[error(
-        "incorrect amount of items selected for `{component}`: expected `{expected}`, got `{got}`"
-    )]
-    IncorrectNumberOfItems {
-        component: String,
-        expected: usize,
-        got: usize,
-    },
+    #[error("No schedule channel set. Set one with `/config set schedule-channel`.")]
+    NoScheduleChannel,
 
-    #[error("invalid component interaction: `{0}`")]
-    InvalidComponentInteraction(String),
+    #[error("RGL.gg profile not found.")]
+    RglProfileNotFound,
+
+    #[error("Invalid interaction target.")]
+    InvalidInteractionTarget,
+
+    #[error("Invalid component interaction")]
+    InvalidComponentInteraction,
+
+    #[error("Invalid date/time")]
+    InvalidDateTime,
+
+    #[error(transparent)]
+    Arc(#[from] Arc<Self>),
+}
+
+impl From<serenity::Error> for BotError {
+    fn from(err: serenity::Error) -> Self {
+        Self::Serenity(Box::new(err))
+    }
 }

@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use crate::{
     Bot, BotResult,
     entities::{
-        game::{self, ConnectInfo, Maps},
+        game::{self, Maps, ReservationId},
         team_guild::GameFormat,
     },
     error::BotError,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, SubCommand)]
-pub struct JoinCommand {
+pub struct AddCommand {
     /// The date/time to schedule the scrim for.
     #[command(autocomplete)]
     date_time: OffsetDateTime,
@@ -31,11 +31,13 @@ pub struct JoinCommand {
     /// format.
     game_format: Option<GameFormat>,
 
-    /// The connect info for the other team's server.
-    connect_info: Option<ConnectInfo>,
+    /// An existing reservation to set up and modify. If not provided, a new
+    /// reservation will be created.
+    #[command(autocomplete)]
+    reservation_id: Option<ReservationId>,
 }
 
-impl JoinCommand {
+impl AddCommand {
     #[allow(clippy::too_many_lines)]
     pub async fn run(
         self,
@@ -49,12 +51,7 @@ impl JoinCommand {
 
         guild.ensure_time_open(&tx, self.date_time).await?;
 
-        let (ip_and_port, password) = self
-            .connect_info
-            .map(|connect_info| (connect_info.ip_and_port, connect_info.password))
-            .unzip();
-
-        let game = game::Model {
+        let mut game = game::Model {
             guild_id: guild.id,
             timestamp: self.date_time,
             game_format: self
@@ -62,16 +59,29 @@ impl JoinCommand {
                 .or(guild.game_format)
                 .ok_or(BotError::NoGameFormat)?,
             opponent_user_id: self.opponent.into(),
-            reservation_id: None,
-            server_ip_and_port: ip_and_port,
-            server_password: password,
+            reservation_id: self.reservation_id,
+            server_ip_and_port: None,
+            server_password: None,
             maps: Some(self.maps.unwrap_or_default()),
             rgl_match_id: None,
         };
 
+        let serveme_api_key = guild
+            .serveme_api_key
+            .as_ref()
+            .ok_or(BotError::NoServemeApiKey)?;
+
+        if self.reservation_id.is_some() {
+            game.edit_reservation(serveme_api_key).await?;
+        } else {
+            let reservation = game.create_reservation(serveme_api_key).await?;
+
+            game.reservation_id = Some(reservation.id);
+        }
+
         let game = game.into_active_model().reset_all().insert(&tx).await?;
 
-        let embed = game.embed(None).await?;
+        let embed = game.embed(Some(serveme_api_key)).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 
@@ -89,7 +99,7 @@ impl JoinCommand {
     }
 }
 
-impl JoinCommandAutocomplete {
+impl HostCommandAutocomplete {
     pub async fn autocomplete(
         self,
         bot: &Bot,
@@ -111,6 +121,13 @@ impl JoinCommandAutocomplete {
 
                 guild
                     .autocomplete_maps(ctx, interaction, game_format.flatten().into_value(), &maps)
+                    .await
+            }
+            Self::ReservationId { reservation_id, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
+
+                guild
+                    .autocomplete_reservations(ctx, interaction, tx, &reservation_id)
                     .await
             }
         }

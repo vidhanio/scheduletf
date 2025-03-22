@@ -1,40 +1,40 @@
-use serenity::all::{
-    CommandInteraction, Context, EditInteractionResponse, ScheduledEventId, UserId,
-};
+use sea_orm::{ActiveModelTrait, IntoActiveModel};
+use serenity::all::{CommandInteraction, Context, EditInteractionResponse, UserId};
 use serenity_commands::SubCommand;
-use sqlx::query_as;
+use time::OffsetDateTime;
 
 use crate::{
-    error::BotError,
-    models::{DbScrim, GameFormat, Map, NextDay, Scrim, ServerInfo, Status, Time},
-    utils::success_embed,
     Bot, BotResult,
+    entities::{
+        game::{self, Maps, ReservationId},
+        team_guild::GameFormat,
+    },
+    error::BotError,
+    utils::success_embed,
 };
 
 #[derive(Clone, Debug, SubCommand)]
 pub struct HostCommand {
-    /// The next day of the week the scrim is scheduled for.
-    day: NextDay,
+    /// The date/time to schedule the scrim for.
+    #[command(autocomplete)]
+    date_time: OffsetDateTime,
 
-    /// The time the scrim is scheduled for.
-    time: Time,
-
-    /// Opposing team's contact. Enter their user ID if they are not in the
-    /// server.
+    /// Opposing team's contacted team member. Enter their user ID if they are
+    /// not in the server.
     opponent: UserId,
 
-    /// The game format of the scrim.
-    game_format: GameFormat,
+    /// Comma-separated list of maps to be played.
+    #[command(autocomplete)]
+    maps: Option<Maps>,
 
-    /// The first map to be played.
-    map_1: Option<Map>,
-
-    /// The second map to be played.
-    map_2: Option<Map>,
+    /// The game format of the scrim. Defaults to the guild's default game
+    /// format.
+    game_format: Option<GameFormat>,
 
     /// An existing reservation to set up and modify. If not provided, a new
     /// reservation will be created.
-    reservation_id: Option<u32>,
+    #[command(autocomplete)]
+    reservation_id: Option<ReservationId>,
 }
 
 impl HostCommand {
@@ -47,72 +47,43 @@ impl HostCommand {
     ) -> BotResult {
         interaction.defer_ephemeral(ctx).await?;
 
-        let (guild, mut tx) = bot.get_guild_tx(interaction.guild_id).await?;
+        let (mut guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        let timestamp = self.day.to_datetime(self.time);
+        guild.ensure_time_open(&tx, self.date_time).await?;
 
-        if let Some(scrim) = query_as!(
-            DbScrim,
-            "SELECT * FROM scrims
-            WHERE guild_id = $1 AND timestamp = $2",
-            i64::from(guild.id),
-            timestamp,
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        .map(Scrim::from)
-        {
-            return Err(BotError::ScrimAlreadyScheduled(scrim.timestamp));
-        }
-
-        let mut scrim = Scrim {
+        let mut game = game::Model {
             guild_id: guild.id,
-            timestamp,
-            opponent_user_id: self.opponent,
-            game_format: self.game_format,
-            map_1: self.map_1,
-            map_2: self.map_2,
-            server_info: None,
-            event_id: ScheduledEventId::default(),
-            message_id: None,
-            status: Status::Waiting,
+            timestamp: self.date_time,
+            game_format: self
+                .game_format
+                .or(guild.game_format)
+                .ok_or(BotError::NoGameFormat)?,
+            opponent_user_id: self.opponent.into(),
+            reservation_id: self.reservation_id,
+            server_ip_and_port: None,
+            server_password: None,
+            maps: Some(self.maps.unwrap_or_default()),
+            rgl_match_id: None,
         };
 
-        if let Some(serveme_api_key) = guild.serveme_api_key {
-            let reservation = if let Some(reservation_id) = self.reservation_id {
-                bot.edit_serveme_reservation(&serveme_api_key, &scrim, reservation_id)
-                    .await?
-            } else {
-                bot.new_serveme_reservation(&serveme_api_key, &scrim)
-                    .await?
-            };
+        let serveme_api_key = guild
+            .serveme_api_key
+            .as_ref()
+            .ok_or(BotError::NoServemeApiKey)?;
 
-            let connect_info = reservation.connect_info();
-
-            scrim.server_info = Some(ServerInfo::Serveme {
-                reservation_id: reservation.id,
-                rcon_password: reservation.rcon,
-                connect_info,
-            });
+        if self.reservation_id.is_some() {
+            game.edit_reservation(serveme_api_key).await?;
         } else {
-            return Err(BotError::NoServemeApiKey);
+            let reservation = game.create_reservation(serveme_api_key).await?;
+
+            game.reservation_id = Some(reservation.id);
         }
 
-        scrim.event_id = guild
-            .id
-            .create_scheduled_event(ctx, scrim.create_event())
-            .await?
-            .id;
+        let game = game.into_active_model().reset_all().insert(&tx).await?;
 
-        if let Some(games_channel) = guild.games_channel_id {
-            let message_id = games_channel.send_message(ctx, scrim.message()).await?.id;
+        let embed = game.embed(Some(serveme_api_key)).await?;
 
-            scrim.message_id = Some(message_id);
-        }
-
-        let embed = scrim.embed();
-
-        DbScrim::from(scrim).insert(&mut *tx).await?;
+        guild.refresh_schedule(ctx, &tx).await?;
 
         tx.commit().await?;
 
@@ -125,5 +96,40 @@ impl HostCommand {
             .await?;
 
         Ok(())
+    }
+}
+
+impl HostCommandAutocomplete {
+    pub async fn autocomplete(
+        self,
+        bot: &Bot,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+    ) -> BotResult {
+        match self {
+            Self::DateTime { date_time, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
+
+                guild
+                    .autocomplete_times(ctx, interaction, tx, &date_time)
+                    .await
+            }
+            Self::Maps {
+                maps, game_format, ..
+            } => {
+                let guild = bot.get_guild(interaction.guild_id).await?;
+
+                guild
+                    .autocomplete_maps(ctx, interaction, game_format.flatten().into_value(), &maps)
+                    .await
+            }
+            Self::ReservationId { reservation_id, .. } => {
+                let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
+
+                guild
+                    .autocomplete_reservations(ctx, interaction, tx, &reservation_id)
+                    .await
+            }
+        }
     }
 }

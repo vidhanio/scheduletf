@@ -1,22 +1,27 @@
+mod autocomplete;
 mod commands;
 mod components;
 mod config;
+mod entities;
 mod error;
-mod models;
+mod rgl;
 mod serveme;
 mod utils;
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use models::{DbGuild, DbScrim, Guild, Scrim};
-use serenity::all::{
-    async_trait, Context, EventHandler, GatewayIntents, GuildId, Interaction, Ready,
-    ScheduledEvent, ScheduledEventStatus,
+use commands::AllCommandsAutocomplete;
+use components::AllComponents;
+use entities::team_guild;
+use migration::{Migrator, MigratorTrait};
+use sea_orm::{
+    ActiveValue::Set, Database, DatabaseConnection, DatabaseTransaction, TransactionTrait,
+    prelude::*,
 };
-use serenity_commands::Commands;
-use serveme::{DeleteReservationRequest, FindServersRequest, ReservationResponse};
-use sqlx::{query, query_as, PgPool, Postgres};
-use time::Duration;
+use serenity::all::{
+    Command, Context, EventHandler, GatewayIntents, GuildId, Interaction, Ready, async_trait,
+};
+use serenity_commands::{AutocompleteCommands, Commands};
 use tracing::{error, info, instrument};
 use utils::handle_error;
 
@@ -28,12 +33,14 @@ type BotResult<T = ()> = Result<T, BotError>;
 pub async fn run(config: Config) -> BotResult {
     info!("connecting to database...");
 
-    let pool = PgPool::connect(&config.database_url).await?;
+    let db = Database::connect(&config.database_url).await?;
+
+    info!("running migrations...");
+    Migrator::up(&db, None).await?;
 
     let bot = Bot {
         config: Arc::new(config),
-        pool,
-        http_client: reqwest::Client::new(),
+        db,
     };
 
     info!("building client...");
@@ -52,86 +59,47 @@ pub async fn run(config: Config) -> BotResult {
     Ok(())
 }
 
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+
 #[derive(Debug, Clone)]
 pub struct Bot {
     config: Arc<Config>,
-    pool: PgPool,
-    http_client: reqwest::Client,
+    db: DatabaseConnection,
 }
 
 impl Bot {
     #[instrument(skip(self))]
+    async fn get_guild(&self, guild_id: Option<GuildId>) -> BotResult<team_guild::Model> {
+        let (guild, tx) = self.get_guild_tx(guild_id).await?;
+
+        tx.commit().await?;
+
+        Ok(guild)
+    }
+
+    #[instrument(skip(self))]
     async fn get_guild_tx(
         &self,
         guild_id: Option<GuildId>,
-    ) -> BotResult<(Guild, sqlx::Transaction<'_, Postgres>)> {
-        let guild_id = i64::from(guild_id.ok_or(BotError::NoGuild)?);
+    ) -> BotResult<(team_guild::Model, DatabaseTransaction)> {
+        let guild_id = guild_id.ok_or(BotError::NoGuild)?;
 
-        let mut tx = self.pool.begin().await?;
+        let tx = self.db.begin().await?;
 
-        query!(
-            r#"
-            INSERT INTO guilds (id)
-            VALUES ($1)
-            ON CONFLICT (id) DO NOTHING
-            "#,
-            guild_id,
-        )
-        .execute(&mut *tx)
-        .await?;
+        let guild = team_guild::Entity::find_by_id(guild_id).one(&tx).await?;
 
-        let db_guild = query_as!(
-            DbGuild,
-            r#"
-            SELECT * FROM guilds WHERE id = $1
-            "#,
-            guild_id,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let guild = if let Some(guild) = guild {
+            guild
+        } else {
+            team_guild::ActiveModel {
+                id: Set(guild_id.into()),
+                ..Default::default()
+            }
+            .insert(&tx)
+            .await?
+        };
 
-        Ok((db_guild.into(), tx))
-    }
-
-    #[instrument(skip(self))]
-    pub async fn new_serveme_reservation(
-        &self,
-        api_key: &str,
-        scrim: &Scrim,
-    ) -> BotResult<ReservationResponse> {
-        let servers = FindServersRequest {
-            starts_at: scrim.timestamp - 10 * Duration::MINUTE,
-            ends_at: scrim.timestamp + Duration::HOUR,
-        }
-        .send(&self.http_client, api_key)
-        .await?;
-
-        scrim
-            .new_reservation_request(&servers)?
-            .send(&self.http_client, api_key)
-            .await
-    }
-
-    #[instrument(skip(self))]
-    pub async fn edit_serveme_reservation(
-        &self,
-        api_key: &str,
-        scrim: &Scrim,
-        reservation_id: u32,
-    ) -> BotResult<ReservationResponse> {
-        scrim
-            .edit_reservation_request()
-            .send(&self.http_client, api_key, reservation_id)
-            .await
-    }
-
-    #[instrument(skip(self))]
-    pub async fn delete_serveme_reservation(
-        &self,
-        api_key: &str,
-        reservation_id: u32,
-    ) -> BotResult<Option<ReservationResponse>> {
-        DeleteReservationRequest::send(&self.http_client, api_key, reservation_id).await
+        Ok((guild, tx))
     }
 }
 
@@ -141,10 +109,29 @@ impl EventHandler for Bot {
     async fn ready(&self, ctx: Context, _: Ready) {
         let commands = AllCommands::create_commands();
 
-        for guild in &self.config.guilds {
-            match guild.set_commands(&ctx.http, commands.clone()).await {
-                Ok(commands) => info!(?guild, ?commands, "registered commands"),
-                Err(error) => error!(?guild, ?error, "failed to register commands"),
+        if self.config.guilds.is_empty() {
+            info!("no guilds configured, registering global commands");
+
+            match Command::set_global_commands(&ctx.http, commands).await {
+                Ok(commands) => info!(?commands, "registered global commands"),
+                Err(error) => error!(?error, "failed to register global commands"),
+            }
+        } else {
+            info!(?self.config.guilds, "registering guild commands");
+
+            for guild in &self.config.guilds {
+                match guild
+                    .set_commands(&ctx.http, commands[..commands.len() - 1].to_vec())
+                    .await
+                {
+                    Ok(commands) => info!(?guild, ?commands, "registered guild commands"),
+                    Err(error) => error!(?guild, ?error, "failed to register guild commands"),
+                }
+            }
+
+            match Command::create_global_command(ctx, commands.last().unwrap().clone()).await {
+                Ok(command) => info!(?command, "registered global user command"),
+                Err(error) => error!(?error, "failed to register global user command"),
             }
         }
     }
@@ -165,46 +152,35 @@ impl EventHandler for Bot {
                     command.run(self, &ctx, &interaction).await
                 );
             }
-            Interaction::Component(interaction) => {
+            Interaction::Autocomplete(interaction) => {
+                let command = handle_error!(
+                    ctx,
+                    interaction,
+                    AllCommandsAutocomplete::from_command_data(&interaction.data)
+                        .map_err(Into::into)
+                );
+
                 handle_error!(
                     ctx,
                     interaction,
-                    components::run(self, &ctx, &interaction).await
+                    command.autocomplete(self, &ctx, &interaction).await
                 );
             }
-            _ => {}
-        };
-    }
-
-    async fn guild_scheduled_event_update(&self, ctx: Context, event: ScheduledEvent) {
-        if event.creator_id != Some(ctx.cache.current_user().id) {
-            return;
-        }
-
-        if event.status == ScheduledEventStatus::Active {
-            let (guild, mut tx) = handle_error!(self.get_guild_tx(Some(event.guild_id)).await);
-
-            let scrim = handle_error!(query_as!(
-                DbScrim,
-                r#"
-                UPDATE scrims
-                SET status = 1
-                WHERE event_id = $1
-                RETURNING *
-                "#,
-                i64::from(event.id)
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map(Scrim::from));
-
-            if let Some((games_channel, message_id)) = guild.games_channel_id.zip(scrim.message_id)
-            {
-                handle_error!(
-                    games_channel
-                        .edit_message(&ctx, message_id, scrim.edit_message())
-                        .await
+            Interaction::Component(interaction) => {
+                let command = handle_error!(
+                    ctx,
+                    interaction,
+                    AllComponents::from_component_data(&interaction.data)
                 );
+
+                handle_error!(
+                    ctx,
+                    interaction,
+                    command.run(self, &ctx, &interaction).await
+                );
+            }
+            _ => {
+                error!(?interaction, "unsupported interaction type");
             }
         }
     }
