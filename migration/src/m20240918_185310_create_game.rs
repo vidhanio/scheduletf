@@ -14,11 +14,10 @@ impl MigrationTrait for Migration {
                     .table(Game::Table)
                     .col(big_integer(Game::GuildId))
                     .col(timestamp_with_time_zone(Game::Timestamp))
-                    .col(small_integer(Game::GameFormat))
-                    .col(big_integer(Game::OpponentUserId))
                     .col(integer_null(Game::ReservationId))
-                    .col(string_null(Game::ServerIpAndPort))
-                    .col(string_null(Game::ServerPassword))
+                    .col(string_null(Game::ConnectInfo))
+                    .col(big_integer_null(Game::OpponentUserId))
+                    .col(small_integer_null(Game::GameFormat))
                     .col(array_null(Game::Maps, ColumnType::string(None)))
                     .col(integer_null(Game::RglMatchId))
                     .primary_key(Index::create().col(Game::GuildId).col(Game::Timestamp))
@@ -28,26 +27,20 @@ impl MigrationTrait for Migration {
                             .to(TeamGuild::Table, TeamGuild::Id),
                     )
                     .check(
-                        // hosted
-                        ((Expr::col(Game::ReservationId).is_not_null())
-                            .and(Expr::col(Game::ServerIpAndPort).is_null())
-                            .and(Expr::col(Game::ServerPassword).is_null()))
-                        // joined
-                        .or((Expr::col(Game::ReservationId).is_null())
-                            .and(Expr::col(Game::ServerIpAndPort).is_not_null())
-                            .and(Expr::col(Game::ServerPassword).is_not_null()))
-                        // undecided
-                        .or((Expr::col(Game::ReservationId).is_null())
-                            .and(Expr::col(Game::ServerIpAndPort).is_null())
-                            .and(Expr::col(Game::ServerPassword).is_null())),
+                        (Expr::col(Game::ReservationId).is_null())
+                            .or(Expr::col(Game::ConnectInfo).is_null()),
                     )
                     .check(
-                        // official
-                        ((Expr::col(Game::Maps).is_null())
-                            .and(Expr::col(Game::RglMatchId).is_not_null()))
                         // scrim
-                        .or((Expr::col(Game::Maps).is_not_null())
-                            .and(Expr::col(Game::RglMatchId).is_null())),
+                        ((Expr::col(Game::OpponentUserId).is_not_null())
+                            .and(Expr::col(Game::GameFormat).is_not_null())
+                            .and(Expr::col(Game::Maps).is_not_null())
+                            .and(Expr::col(Game::RglMatchId).is_null()))
+                        // match
+                        .or((Expr::col(Game::OpponentUserId).is_null())
+                            .and(Expr::col(Game::GameFormat).is_null())
+                            .and(Expr::col(Game::Maps).is_null())
+                            .and(Expr::col(Game::RglMatchId).is_not_null())),
                     )
                     .take(),
             )
@@ -68,11 +61,12 @@ pub enum Game {
 
     GuildId,
     Timestamp,
-    GameFormat,
-    OpponentUserId,
     ReservationId,
-    ServerIpAndPort,
-    ServerPassword,
+    ConnectInfo,
+
+    OpponentUserId,
+    GameFormat,
     Maps,
+
     RglMatchId,
 }

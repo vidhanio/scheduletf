@@ -120,9 +120,13 @@ pub trait OffsetDateTimeEtExt {
 
     fn to_et_offset(&self) -> Self;
 
-    fn et_short_date(&self) -> String;
+    fn string_et(&self) -> String;
 
-    fn et_long_date(&self) -> String;
+    fn string_et_relative(&self) -> String;
+
+    fn date_et(&self) -> Date;
+
+    fn time_et(&self) -> Time;
 }
 
 impl OffsetDateTimeEtExt for OffsetDateTime {
@@ -152,7 +156,7 @@ impl OffsetDateTimeEtExt for OffsetDateTime {
         self.to_offset(self.et_offset())
     }
 
-    fn et_short_date(&self) -> String {
+    fn string_et(&self) -> String {
         let this = self.to_et_offset();
 
         let weekday = this.weekday();
@@ -172,7 +176,7 @@ impl OffsetDateTimeEtExt for OffsetDateTime {
         format!("{weekday}, {month} {day} at {hour}:{minute:02} {ampm}")
     }
 
-    fn et_long_date(&self) -> String {
+    fn string_et_relative(&self) -> String {
         let this = self.to_et_offset();
 
         let now_date = Self::now_et().date();
@@ -196,6 +200,14 @@ impl OffsetDateTimeEtExt for OffsetDateTime {
         let ampm = if hour_24 >= 12 { "PM" } else { "AM" };
 
         format!("{date} at {hour}:{minute:02} {ampm}")
+    }
+
+    fn date_et(&self) -> Date {
+        self.to_et_offset().date()
+    }
+
+    fn time_et(&self) -> Time {
+        self.to_et_offset().time()
     }
 }
 

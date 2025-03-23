@@ -1,15 +1,15 @@
-app = 'matchbox'
+app = 'scheduletf'
 primary_region = 'lax'
 
 [build]
-image = 'registry.fly.io/matchbox:latest'
+image = 'registry.fly.io/scheduletf:latest'
 
 [env]
 PRODUCTION = 'true'
 
 [[mounts]]
 destination = '/data'
-source = 'matchbox_data'
+source = 'scheduletf_data'
 
 [[vm]]
 cpu_kind = 'shared'

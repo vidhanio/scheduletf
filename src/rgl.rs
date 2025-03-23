@@ -1,21 +1,39 @@
 use std::{
     fmt::{self, Display, Formatter},
+    hash::Hash,
     result::Result,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
 };
 
 use moka::future::Cache;
 use scraper::{Html, Selector};
+use sea_orm::{
+    DeriveValueType,
+    sea_query::{Nullable, Value},
+};
 use serde::{Deserialize, de::Deserializer};
 use serenity::all::{
     Colour, CreateActionRow, CreateButton, CreateEmbed, CreateEmbedAuthor, EditInteractionResponse,
     UserId,
 };
+use serenity_commands::BasicOption;
+use time::OffsetDateTime;
 
-use crate::{BotResult, HTTP_CLIENT, entities::team_guild::GameFormat, error::BotError};
+use crate::{
+    BotResult, HTTP_CLIENT,
+    entities::{GameFormat, Map},
+    error::BotError,
+};
 
 #[allow(clippy::unreadable_literal)]
 const RGL_ORANGE: Colour = Colour(0xE29455);
+
+fn build_rgl_cache<K: Hash + Eq + Send + Sync + 'static, V: Clone + Send + Sync + 'static>()
+-> Cache<K, V> {
+    Cache::builder()
+        .time_to_live(std::time::Duration::from_secs(10))
+        .build()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,19 +45,27 @@ pub struct RglProfile {
 }
 
 impl RglProfile {
-    pub async fn get(steam_id: SteamId) -> BotResult<Self> {
-        HTTP_CLIENT
-            .get(format!("https://api.rgl.gg/v0/profile/{steam_id}"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<Self>()
-            .await
-            .map_err(Into::into)
+    pub async fn get(steam_id: SteamId) -> BotResult<Arc<Self>> {
+        static CACHE: LazyLock<Cache<SteamId, Arc<RglProfile>>> = LazyLock::new(build_rgl_cache);
+
+        Ok(CACHE
+            .try_get_with(steam_id, async {
+                HTTP_CLIENT
+                    .get(format!("https://api.rgl.gg/v0/profile/{steam_id}"))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await
+                    .map_err(Into::into)
+            })
+            .await?)
     }
 
-    pub async fn get_from_discord(user_id: UserId) -> BotResult<Self> {
-        Self::get(SteamId::get_from_user_id(user_id).await?).await
+    pub async fn get_from_discord(user_id: UserId) -> BotResult<Arc<Self>> {
+        let steam_id = SteamId::get_from_user_id(user_id).await?;
+
+        Self::get(steam_id).await
     }
 
     pub fn url(&self, game_format: Option<GameFormat>) -> String {
@@ -97,33 +123,25 @@ pub struct RglProfileTeams {
     pub highlander: Option<RglProfileTeam>,
 }
 
-impl RglProfileTeams {
-    pub const fn get_team(&self, game_format: GameFormat) -> Option<&RglProfileTeam> {
-        match game_format {
-            GameFormat::Sixes => self.sixes.as_ref(),
-            GameFormat::Highlander => self.highlander.as_ref(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RglProfileTeam {
     pub id: RglTeamId,
-    pub tag: String,
     pub name: String,
+    pub division_id: DivisionId,
     pub division_name: String,
 }
 
 impl RglProfileTeam {
     fn embed_field_body(&self) -> String {
         format!(
-            "[{}]({}) - {}",
+            "[{}]({}) - [{}]({})",
             self.name,
             self.id.url(),
             self.division_name
                 .strip_prefix("RGL-")
                 .unwrap_or(&self.division_name),
+            self.division_id.url(),
         )
     }
 }
@@ -131,7 +149,106 @@ impl RglProfileTeam {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RglTeam {
+    pub season_id: SeasonId,
+}
+
+impl RglTeam {
+    pub async fn get(team_id: RglTeamId) -> BotResult<Arc<Self>> {
+        static CACHE: LazyLock<Cache<RglTeamId, Arc<RglTeam>>> = LazyLock::new(build_rgl_cache);
+
+        Ok(CACHE
+            .try_get_with(team_id, async {
+                HTTP_CLIENT
+                    .get(format!("https://api.rgl.gg/v0/teams/{team_id}"))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await
+                    .map_err(Into::into)
+            })
+            .await?)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RglMatch {
+    pub match_id: RglMatchId,
+    pub season_id: SeasonId,
+    #[serde(with = "time::serde::iso8601")]
+    pub match_date: OffsetDateTime,
+    pub match_name: String,
+    pub teams: (RglMatchTeam, RglMatchTeam),
+    pub maps: Vec<RglMatchMap>,
+}
+
+impl RglMatch {
+    pub async fn get(match_id: RglMatchId) -> BotResult<Arc<Self>> {
+        static CACHE: LazyLock<Cache<RglMatchId, Arc<RglMatch>>> = LazyLock::new(build_rgl_cache);
+
+        Ok(CACHE
+            .try_get_with(match_id, async {
+                HTTP_CLIENT
+                    .get(format!("https://api.rgl.gg/v0/matches/{match_id}"))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await
+                    .map_err(Into::into)
+            })
+            .await?)
+    }
+
+    pub fn opponent_team(&self, team_id: RglTeamId) -> BotResult<RglMatchTeam> {
+        match (
+            self.teams.0.team_id == team_id,
+            self.teams.1.team_id == team_id,
+        ) {
+            (true, false) => Ok(self.teams.1.clone()),
+            (false, true) => Ok(self.teams.0.clone()),
+            _ => Err(BotError::TeamNotInMatch),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RglMatchTeam {
+    pub team_name: String,
     pub team_id: RglTeamId,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RglMatchMap {
+    pub map_name: Map,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RglSeason {
+    pub format_name: GameFormat,
+}
+
+impl RglSeason {
+    pub async fn get(season_id: SeasonId) -> BotResult<Arc<Self>> {
+        static CACHE: LazyLock<Cache<SeasonId, Arc<RglSeason>>> = LazyLock::new(build_rgl_cache);
+
+        Ok(CACHE
+            .try_get_with(season_id, async {
+                HTTP_CLIENT
+                    .get(format!("https://api.rgl.gg/v0/seasons/{season_id}"))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await
+                    .map_err(Into::into)
+            })
+            .await?)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -139,7 +256,7 @@ pub struct SteamId(pub u64);
 
 impl SteamId {
     pub async fn get_from_user_id(user_id: UserId) -> BotResult<Self> {
-        static STEAM_ID_CACHE: LazyLock<Cache<UserId, SteamId>> = LazyLock::new(|| {
+        static CACHE: LazyLock<Cache<UserId, SteamId>> = LazyLock::new(|| {
             Cache::builder()
                 .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
                 .build()
@@ -152,7 +269,7 @@ impl SteamId {
             .expect("static selector should be valid")
         });
 
-        STEAM_ID_CACHE
+        CACHE
             .try_get_with(user_id, async {
                 let html = HTTP_CLIENT
                     .get(format!(
@@ -266,9 +383,9 @@ impl<'de> Deserialize<'de> for SteamId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, BasicOption, DeriveValueType)]
 #[serde(transparent)]
-pub struct RglTeamId(pub u32);
+pub struct RglTeamId(pub i32);
 
 impl RglTeamId {
     pub fn url(self) -> String {
@@ -277,6 +394,66 @@ impl RglTeamId {
 }
 
 impl Display for RglTeamId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+impl Nullable for RglTeamId {
+    fn null() -> Value {
+        i32::null()
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct SeasonId(pub i32);
+
+impl SeasonId {
+    pub fn url(self) -> String {
+        format!("https://rgl.gg/Public/LeagueTable?s={self}")
+    }
+}
+
+impl Display for SeasonId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct DivisionId(pub i32);
+
+impl DivisionId {
+    pub fn url(self) -> String {
+        format!("https://rgl.gg/Public/LeagueTable?g={self}")
+    }
+}
+
+impl Display for DivisionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, BasicOption, DeriveValueType)]
+#[serde(transparent)]
+pub struct RglMatchId(pub i32);
+
+impl RglMatchId {
+    pub fn url(self) -> String {
+        format!("https://rgl.gg/Public/Match?m={self}")
+    }
+}
+
+impl Nullable for RglMatchId {
+    fn null() -> Value {
+        i32::null()
+    }
+}
+
+impl Display for RglMatchId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.0, f)
     }

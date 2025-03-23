@@ -7,18 +7,14 @@ use time::OffsetDateTime;
 
 use crate::{
     BotResult, HTTP_CLIENT,
-    entities::{
-        game::{ConnectInfo, Map, ReservationId},
-        team_guild::{GameFormat, ServemeApiKey},
-    },
+    entities::{ConnectInfo, GameFormat, Map, ReservationId, ServemeApiKey},
 };
 
-static SERVEME_RESERVATION_CACHE: LazyLock<Cache<ReservationId, Arc<ReservationResponse>>> =
-    LazyLock::new(|| {
-        Cache::builder()
-            .time_to_live(std::time::Duration::from_secs(10))
-            .build()
-    });
+static CACHE: LazyLock<Cache<ReservationId, Arc<ReservationResponse>>> = LazyLock::new(|| {
+    Cache::builder()
+        .time_to_live(std::time::Duration::from_secs(10))
+        .build()
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReservationWrapper<T> {
@@ -80,7 +76,7 @@ impl GetReservationRequest {
         api_key: &ServemeApiKey,
         reservation_id: ReservationId,
     ) -> BotResult<Arc<ReservationResponse>> {
-        Ok(SERVEME_RESERVATION_CACHE
+        Ok(CACHE
             .try_get_with(reservation_id, async {
                 Ok(HTTP_CLIENT
                     .get(format!(
@@ -133,9 +129,7 @@ impl CreateReservationRequest {
                 .reservation,
         );
 
-        SERVEME_RESERVATION_CACHE
-            .insert(reservation.id, Arc::clone(&reservation))
-            .await;
+        CACHE.insert(reservation.id, Arc::clone(&reservation)).await;
 
         Ok(reservation)
     }
@@ -183,9 +177,7 @@ impl EditReservationRequest {
                 .reservation,
         );
 
-        SERVEME_RESERVATION_CACHE
-            .insert(reservation.id, Arc::clone(&reservation))
-            .await;
+        CACHE.insert(reservation.id, Arc::clone(&reservation)).await;
 
         Ok(reservation)
     }
@@ -208,7 +200,7 @@ impl DeleteReservationRequest {
             .await?
             .error_for_status()?;
 
-        SERVEME_RESERVATION_CACHE.invalidate(&reservation_id).await;
+        CACHE.invalidate(&reservation_id).await;
 
         if resp.status() == StatusCode::NO_CONTENT {
             Ok(None)
@@ -253,7 +245,7 @@ impl MapsRequest {
         api_key: &ServemeApiKey,
         format: Option<GameFormat>,
     ) -> BotResult<Arc<[Map]>> {
-        static MAPS_CACHE: LazyLock<Cache<Option<GameFormat>, Arc<[Map]>>> = LazyLock::new(|| {
+        static MAP_CACHE: LazyLock<Cache<Option<GameFormat>, Arc<[Map]>>> = LazyLock::new(|| {
             Cache::builder()
                 .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
                 .build()
@@ -264,7 +256,7 @@ impl MapsRequest {
             maps: Vec<Map>,
         }
 
-        Ok(MAPS_CACHE
+        Ok(MAP_CACHE
             .try_get_with(format, async {
                 let mut maps = HTTP_CLIENT
                     .get("https://na.serveme.tf/api/maps")

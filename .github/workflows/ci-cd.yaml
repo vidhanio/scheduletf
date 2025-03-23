@@ -7,7 +7,7 @@ on:
 env:
   POSTGRES_USER: vidhanio
   POSTGRES_PASSWORD: password
-  POSTGRES_DB: matchbox-ci
+  POSTGRES_DB: scheduletf-ci
 
   DATABASE_URL: postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost/$POSTGRES_DB
 
@@ -123,8 +123,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/vidhanio/matchbox
-            registry.fly.io/matchbox
+            ghcr.io/vidhanio/scheduletf
+            registry.fly.io/scheduletf
           tags: |
             type=ref,event=branch
             type=sha
@@ -166,7 +166,7 @@ jobs:
 
     environment:
       name: Development
-      url: https://fly.io/apps/matchbox/monitoring
+      url: https://fly.io/apps/scheduletf/monitoring
 
     runs-on: ubuntu-latest
 

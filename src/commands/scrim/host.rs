@@ -6,8 +6,8 @@ use time::OffsetDateTime;
 use crate::{
     Bot, BotResult,
     entities::{
-        game::{self, Maps, ReservationId},
-        team_guild::GameFormat,
+        GameFormat, Maps, ReservationId,
+        game::{Game, GameServer, Scrim},
     },
     error::BotError,
     utils::success_embed,
@@ -51,37 +51,34 @@ impl HostCommand {
 
         guild.ensure_time_open(&tx, self.date_time).await?;
 
-        let mut game = game::Model {
+        let mut game = Game {
             guild_id: guild.id,
             timestamp: self.date_time,
-            game_format: self
-                .game_format
-                .or(guild.game_format)
-                .ok_or(BotError::NoGameFormat)?,
-            opponent_user_id: self.opponent.into(),
-            reservation_id: self.reservation_id,
-            server_ip_and_port: None,
-            server_password: None,
-            maps: Some(self.maps.unwrap_or_default()),
-            rgl_match_id: None,
+            server: self
+                .reservation_id
+                .map(GameServer::Hosted)
+                .unwrap_or_default(),
+            details: Scrim {
+                opponent_user_id: self.opponent.into(),
+                game_format: self
+                    .game_format
+                    .or(guild.game_format)
+                    .ok_or(BotError::NoGameFormat)?,
+                maps: self.maps.unwrap_or_default(),
+            },
         };
 
-        let serveme_api_key = guild
-            .serveme_api_key
-            .as_ref()
-            .ok_or(BotError::NoServemeApiKey)?;
+        let serveme_api_key = guild.serveme_api_key()?;
 
-        if self.reservation_id.is_some() {
+        if game.server.is_hosted() {
             game.edit_reservation(serveme_api_key).await?;
         } else {
-            let reservation = game.create_reservation(serveme_api_key).await?;
-
-            game.reservation_id = Some(reservation.id);
+            game.create_reservation(serveme_api_key).await?;
         }
 
-        let game = game.into_active_model().reset_all().insert(&tx).await?;
+        let game = Game::try_from(game.into_active_model().insert(&tx).await?)?;
 
-        let embed = game.embed(Some(serveme_api_key)).await?;
+        let embed = game.embed(Some(serveme_api_key), None).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 

@@ -4,7 +4,8 @@ use serenity_commands::{Command, SubCommandGroup};
 
 use crate::{
     Bot, BotResult,
-    entities::team_guild::{GameFormat, ScheduleChannelId, ServemeApiKey},
+    entities::{GameFormat, ScheduleChannelId, ServemeApiKey},
+    rgl::{RglSeason, RglTeam, RglTeamId},
     utils::{create_message, success_embed},
 };
 
@@ -57,6 +58,9 @@ config_commands! {
 
     "schedule channel"
     ScheduleChannel { channel: ScheduleChannelId },
+
+    "RGL team ID"
+    RglTeam { team_id: RglTeamId },
 }
 
 impl ConfigCommand {
@@ -94,6 +98,17 @@ impl ConfigCommand {
                     ConfigSetCommand::ScheduleChannel { channel } => {
                         guild.schedule_channel_id.set_if_not_equals(Some(channel));
                     }
+                    ConfigSetCommand::RglTeam { team_id } => {
+                        guild.rgl_team_id.set_if_not_equals(Some(team_id));
+
+                        let team = RglTeam::get(team_id).await?;
+
+                        let season = RglSeason::get(team.season_id).await?;
+
+                        guild
+                            .game_format
+                            .set_if_not_equals(Some(season.format_name));
+                    }
                 }
 
                 guild
@@ -111,6 +126,9 @@ impl ConfigCommand {
                     ConfigUnsetCommand::ScheduleChannel => {
                         guild.schedule_channel_id.set_if_not_equals(None);
                         guild.schedule_message_id.set_if_not_equals(None);
+                    }
+                    ConfigUnsetCommand::RglTeam => {
+                        guild.rgl_team_id.set_if_not_equals(None);
                     }
                 }
 

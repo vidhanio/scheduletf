@@ -6,8 +6,8 @@ use time::OffsetDateTime;
 use crate::{
     Bot, BotResult,
     entities::{
-        game::{self, ConnectInfo, Maps},
-        team_guild::GameFormat,
+        ConnectInfo, GameFormat, Maps,
+        game::{Game, GameServer, Scrim},
     },
     error::BotError,
     utils::success_embed,
@@ -49,29 +49,26 @@ impl JoinCommand {
 
         guild.ensure_time_open(&tx, self.date_time).await?;
 
-        let (ip_and_port, password) = self
-            .connect_info
-            .map(|connect_info| (connect_info.ip_and_port, connect_info.password))
-            .unzip();
-
-        let game = game::Model {
+        let game = Game {
             guild_id: guild.id,
             timestamp: self.date_time,
-            game_format: self
-                .game_format
-                .or(guild.game_format)
-                .ok_or(BotError::NoGameFormat)?,
-            opponent_user_id: self.opponent.into(),
-            reservation_id: None,
-            server_ip_and_port: ip_and_port,
-            server_password: password,
-            maps: Some(self.maps.unwrap_or_default()),
-            rgl_match_id: None,
+            server: self
+                .connect_info
+                .map(GameServer::Joined)
+                .unwrap_or_default(),
+            details: Scrim {
+                opponent_user_id: self.opponent.into(),
+                game_format: self
+                    .game_format
+                    .or(guild.game_format)
+                    .ok_or(BotError::NoGameFormat)?,
+                maps: self.maps.unwrap_or_default(),
+            },
         };
 
-        let game = game.into_active_model().reset_all().insert(&tx).await?;
+        let game = Game::try_from(game.into_active_model().insert(&tx).await?)?;
 
-        let embed = game.embed(None).await?;
+        let embed = game.embed(None, None).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 

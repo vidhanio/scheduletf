@@ -1,29 +1,27 @@
 use std::{
     collections::{BTreeMap, HashSet},
-    fmt::{self, Display, Formatter},
     iter, mem,
     string::ToString,
 };
 
 use sea_orm::{
-    ActiveValue::Set, DatabaseTransaction, IntoActiveModel, QueryOrder, QuerySelect, TryFromU64,
-    entity::prelude::*, sea_query::Nullable,
+    ActiveValue::Set, DatabaseTransaction, IntoActiveModel, QueryOrder, QuerySelect,
+    entity::prelude::*,
 };
-use serde::{Deserialize, Serialize};
 use serenity::{
     all::{
-        AutocompleteChoice, ChannelId, ChannelType, CommandInteraction, Context,
-        CreateAutocompleteResponse, CreateEmbed, CreateInteractionResponse, CreateMessage,
-        DiscordJsonError, EditMessage, ErrorResponse, GuildId, HttpError, Mentionable, MessageId,
+        AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse, CreateEmbed,
+        CreateInteractionResponse, CreateMessage, DiscordJsonError, EditMessage, ErrorResponse,
+        HttpError, Mentionable,
     },
     futures::{StreamExt, TryStreamExt, stream},
 };
-use serenity_commands::BasicOption;
 use time::{Date, Duration, OffsetDateTime, Time};
 
 use super::{
-    discord_id,
-    game::{Maps, OpponentUserId, ReservationId},
+    GameFormat, Maps, ReservationId, ScheduleChannelId, ScheduleMessageId, ServemeApiKey,
+    TeamGuildId,
+    game::{Game, GameDetails, Scrim},
 };
 use crate::{
     BotResult,
@@ -34,6 +32,7 @@ use crate::{
     components::RefreshButton,
     entities::game,
     error::BotError,
+    rgl::RglTeamId,
     serveme::MapsRequest,
     utils::{OffsetDateTimeEtExt, date_string},
 };
@@ -51,12 +50,14 @@ pub struct Model {
 }
 
 impl Model {
-    pub async fn get_game(
+    pub async fn get_game<D: GameDetails>(
         &self,
         tx: &DatabaseTransaction,
         date_time: OffsetDateTime,
-    ) -> BotResult<game::Model> {
+    ) -> BotResult<Game<D>> {
         game::Entity::find_by_id((self.id, date_time))
+            .filter(D::filter_expr())
+            .into_partial_model()
             .one(tx)
             .await?
             .ok_or(BotError::GameNotFound)
@@ -75,13 +76,17 @@ impl Model {
             .await?
             .is_none()
             .then_some(())
-            .ok_or(BotError::GameAlreadyScheduled)
+            .ok_or(BotError::TimeSlotTaken)
     }
 
     pub fn serveme_api_key(&self) -> BotResult<&ServemeApiKey> {
         self.serveme_api_key
             .as_ref()
             .ok_or(BotError::NoServemeApiKey)
+    }
+
+    pub fn rgl_team_id(&self) -> BotResult<RglTeamId> {
+        self.rgl_team_id.ok_or(BotError::NoRglTeam)
     }
 
     pub async fn autocomplete_times(
@@ -173,7 +178,7 @@ impl Model {
                             .into_iter()
                             .map(|datetime| {
                                 AutocompleteChoice::new(
-                                    datetime.et_long_date(),
+                                    datetime.string_et_relative(),
                                     datetime.unix_timestamp(),
                                 )
                             })
@@ -188,7 +193,7 @@ impl Model {
         Ok(())
     }
 
-    pub async fn autocomplete_games(
+    pub async fn autocomplete_games<D: GameDetails>(
         &self,
         ctx: &Context,
         interaction: &CommandInteraction,
@@ -197,23 +202,22 @@ impl Model {
     ) -> BotResult {
         let (_, day_query, time_query) = split_datetime_query(query);
 
-        let datetimes = self
+        let matches = self
             .find_related(game::Entity)
             .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(2)))
+            .filter(D::filter_expr())
             .select_only()
-            .column(game::Column::Timestamp)
-            .column(game::Column::OpponentUserId)
             .order_by_asc(game::Column::Timestamp)
-            .into_tuple::<(OffsetDateTime, OpponentUserId)>()
+            .into_partial_model::<Game<D>>()
             .all(&tx)
             .await?
             .into_iter()
-            .filter(|(datetime, _)| {
-                let date_matches = day_aliases(datetime.date())
+            .filter(|game| {
+                let date_matches = day_aliases(game.timestamp.date())
                     .iter()
                     .any(|n| n.starts_with(&day_query));
 
-                let time_matches = time_aliases(datetime.time())
+                let time_matches = time_aliases(game.timestamp.time())
                     .iter()
                     .any(|n| n.starts_with(&time_query));
 
@@ -226,19 +230,20 @@ impl Model {
                 ctx,
                 CreateInteractionResponse::Autocomplete(
                     CreateAutocompleteResponse::new().set_choices(
-                        stream::iter(datetimes)
+                        stream::iter(matches)
                             .map(Ok)
-                            .and_then(async |(datetime, user_id)| {
+                            .and_then(async |m| {
+                                let opponent =
+                                    m.details.opponent_string(ctx, self.rgl_team_id).await?;
+
                                 BotResult::Ok(AutocompleteChoice::new(
                                     format!(
-                                        "{} vs. {}",
-                                        datetime.et_long_date(),
-                                        user_id
-                                            .to_user(ctx)
-                                            .await
-                                            .map(|user| user.global_name.unwrap_or(user.name))?
+                                        "{}: {} vs. {}",
+                                        m.timestamp.string_et_relative(),
+                                        m.details.kind(),
+                                        opponent,
                                     ),
-                                    datetime.unix_timestamp(),
+                                    m.timestamp.unix_timestamp(),
                                 ))
                             })
                             .try_collect()
@@ -267,7 +272,7 @@ impl Model {
             .filter(
                 game::Column::Timestamp.gte(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT)),
             )
-            .filter(game::Column::ReservationId.is_not_null())
+            .filter(Scrim::filter_expr())
             .select_only()
             .column(game::Column::ReservationId)
             .column(game::Column::Timestamp)
@@ -311,7 +316,7 @@ impl Model {
                         data.map(|(reservation, datetimes)| {
                             let datetimes = datetimes
                                 .iter()
-                                .map(OffsetDateTime::et_long_date)
+                                .map(OffsetDateTime::string_et_relative)
                                 .collect::<Vec<_>>()
                                 .join(", ");
 
@@ -415,13 +420,14 @@ impl Model {
             .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(2)))
             .order_by_asc(game::Column::Timestamp)
             .limit(25)
+            .into_partial_model::<Game>()
             .all(tx)
             .await?;
 
-        let mut map = BTreeMap::<Date, Vec<game::Model>>::new();
+        let mut map = BTreeMap::<Date, Vec<Game>>::new();
 
         for game in games {
-            let date = game.timestamp.to_et_offset().date();
+            let date = game.timestamp.date_et();
 
             map.entry(date).or_default().push(game);
         }
@@ -444,11 +450,14 @@ impl Model {
                             )
                             .map(Ok)
                             .and_then(async |(game, next_game)| {
-                                let include_connect = !next_game.is_some_and(|next_game| {
-                                    game.reservation_id == next_game.reservation_id
-                                });
-                                game.schedule_entry(self.serveme_api_key.as_ref(), include_connect)
-                                    .await
+                                let include_connect = !next_game
+                                    .is_some_and(|next_game| game.server == next_game.server);
+                                game.schedule_entry(
+                                    self.serveme_api_key.as_ref(),
+                                    self.rgl_team_id,
+                                    include_connect,
+                                )
+                                .await
                             })
                             .try_collect::<String>()
                             .await?,
@@ -508,7 +517,7 @@ impl Model {
 
     pub fn config_embed(&self) -> CreateEmbed {
         CreateEmbed::new()
-            .title("Matchbox Configuration")
+            .title("scheduleTF Configuration")
             .field(
                 "RGL Team ID",
                 self.rgl_team_id
@@ -562,94 +571,3 @@ impl Related<super::game::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-
-discord_id!(TeamGuildId(GuildId));
-
-impl TryFromU64 for TeamGuildId {
-    fn try_from_u64(n: u64) -> Result<Self, DbErr> {
-        i64::try_from_u64(n).map(Into::into)
-    }
-}
-
-discord_id!(?ScheduleChannelId(ChannelId));
-discord_id!(?ScheduleMessageId(MessageId));
-
-impl BasicOption for ScheduleChannelId {
-    type Partial = ChannelId;
-
-    fn create_option(
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> serenity::all::CreateCommandOption {
-        ChannelId::create_option(name, description).channel_types(vec![ChannelType::Text])
-    }
-
-    fn from_value(
-        value: Option<&serenity::all::CommandDataOptionValue>,
-    ) -> serenity_commands::Result<Self> {
-        ChannelId::from_value(value).map(Self)
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, DeriveValueType)]
-pub struct RglTeamId(pub i32);
-
-impl Display for RglTeamId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-impl Nullable for RglTeamId {
-    fn null() -> Value {
-        i32::null()
-    }
-}
-
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, EnumIter, BasicOption, DeriveActiveEnum)]
-#[sea_orm(rs_type = "i16", db_type = "SmallInteger")]
-#[option(option_type = "string")]
-pub enum GameFormat {
-    Sixes = 6,
-    Highlander = 9,
-}
-
-impl GameFormat {
-    pub const fn rgl_id(self) -> u8 {
-        match self {
-            Self::Sixes => 40,
-            Self::Highlander => 24,
-        }
-    }
-}
-
-impl Display for GameFormat {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Sixes => f.write_str("Sixes"),
-            Self::Highlander => f.write_str("Highlander"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BasicOption, DeriveValueType, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ServemeApiKey(pub String);
-
-impl ServemeApiKey {
-    pub fn auth_header(&self) -> String {
-        format!("Token token={self}")
-    }
-}
-
-impl Display for ServemeApiKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-impl Nullable for ServemeApiKey {
-    fn null() -> Value {
-        String::null()
-    }
-}

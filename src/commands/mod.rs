@@ -1,5 +1,6 @@
 mod config;
-// mod official;
+mod game;
+mod r#match;
 mod refresh;
 mod scrim;
 
@@ -10,7 +11,10 @@ use serenity::all::{
 use serenity_commands::Commands;
 use tracing::instrument;
 
-use self::{config::ConfigCommand, refresh::RefreshCommand, scrim::ScrimCommand};
+use self::{
+    config::ConfigCommand, game::GameCommand, r#match::MatchCommand, refresh::RefreshCommand,
+    scrim::ScrimCommand,
+};
 use crate::{Bot, BotResult, error::BotError, rgl::RglProfile};
 
 #[derive(Debug, Commands)]
@@ -26,12 +30,20 @@ pub enum AllCommands {
     )]
     Scrim(ScrimCommand),
 
-    // /// Manage official matches.
-    // #[command(
-    //     autocomplete,
-    //     builder(default_member_permissions(Permissions::MANAGE_GUILD))
-    // )]
-    // Official(OfficialCommand),
+    /// Manage matches.
+    #[command(
+        autocomplete,
+        builder(default_member_permissions(Permissions::MANAGE_GUILD))
+    )]
+    Match(MatchCommand),
+
+    /// Manage games.
+    #[command(
+        autocomplete,
+        builder(default_member_permissions(Permissions::MANAGE_GUILD))
+    )]
+    Game(GameCommand),
+
     /// Refresh the schedule.
     Refresh(RefreshCommand),
 
@@ -56,7 +68,8 @@ impl AllCommands {
         match self {
             Self::Config(cmd) => cmd.run(bot, ctx, interaction).await,
             Self::Scrim(cmd) => cmd.run(bot, ctx, interaction).await,
-            // Self::Official(cmd) => cmd.run(bot, ctx, interaction).await,
+            Self::Match(cmd) => cmd.run(bot, ctx, interaction).await,
+            Self::Game(cmd) => cmd.run(bot, ctx, interaction).await,
             Self::Refresh(cmd) => cmd.run(bot, ctx, interaction).await,
             Self::RglProfile => {
                 let ResolvedTarget::User(user, _) = interaction
@@ -89,7 +102,8 @@ impl AllCommandsAutocomplete {
     ) -> BotResult {
         match self {
             Self::Scrim(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
-            // Self::Official(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::Match(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
+            Self::Game(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
         }
     }
 }

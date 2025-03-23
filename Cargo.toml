@@ -1,5 +1,5 @@
 [package]
-name = "matchbox"
+name = "scheduletf"
 
 authors = ["Vidhan Bhatt <me@vidhan.io>"]
 edition = "2024"

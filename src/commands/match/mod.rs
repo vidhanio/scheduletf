@@ -9,21 +9,19 @@ use self::{edit::EditCommand, host::HostCommand, join::JoinCommand};
 use crate::{Bot, BotResult};
 
 #[derive(Debug, Command)]
-pub enum ScrimCommand {
-    /// Host a new scrim.
-    #[command(autocomplete)]
+pub enum MatchCommand {
+    /// Add a hosted match to the schedule.
     Host(HostCommand),
 
-    /// Join a scrim hosted by another team.
-    #[command(autocomplete)]
+    /// Add a joined match to the schedule.
     Join(JoinCommand),
 
-    /// Edit an existing scrim.
+    /// Edit an existing match.
     #[command(autocomplete)]
     Edit(EditCommand),
 }
 
-impl ScrimCommand {
+impl MatchCommand {
     pub async fn run(
         self,
         bot: &Bot,
@@ -38,7 +36,7 @@ impl ScrimCommand {
     }
 }
 
-impl ScrimCommandAutocomplete {
+impl MatchCommandAutocomplete {
     pub async fn autocomplete(
         self,
         bot: &Bot,
@@ -46,8 +44,6 @@ impl ScrimCommandAutocomplete {
         interaction: &CommandInteraction,
     ) -> BotResult {
         match self {
-            Self::Host(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
-            Self::Join(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
             Self::Edit(cmd) => cmd.autocomplete(bot, ctx, interaction).await,
         }
     }

@@ -2,13 +2,13 @@ use serenity::all::{CommandInteraction, Context, EditInteractionResponse};
 use serenity_commands::SubCommand;
 use time::OffsetDateTime;
 
-use crate::{Bot, BotResult};
+use crate::{Bot, BotResult, entities::game::ScrimOrMatch};
 
 #[derive(Clone, Debug, SubCommand)]
 pub struct ShowCommand {
-    /// The scrim to get details of.
+    /// The game to get details of.
     #[command(autocomplete)]
-    scrim: OffsetDateTime,
+    game: OffsetDateTime,
 }
 
 impl ShowCommand {
@@ -24,9 +24,9 @@ impl ShowCommand {
         let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
         let embed = guild
-            .get_game(&tx, self.scrim)
+            .get_game(&tx, self.game)
             .await?
-            .embed(guild.serveme_api_key.as_ref())
+            .embed(guild.serveme_api_key.as_ref(), guild.rgl_team_id)
             .await?;
 
         tx.commit().await?;
@@ -46,10 +46,12 @@ impl ShowCommandAutocomplete {
         ctx: &Context,
         interaction: &CommandInteraction,
     ) -> BotResult {
-        let Self::Scrim { scrim } = self;
+        let Self::Game { game } = self;
 
         let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        guild.autocomplete_games(ctx, interaction, tx, &scrim).await
+        guild
+            .autocomplete_games::<ScrimOrMatch>(ctx, interaction, tx, &game)
+            .await
     }
 }

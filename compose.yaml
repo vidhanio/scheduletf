@@ -1,9 +1,9 @@
-name: matchbox
+name: scheduletf
 
 services:
   bot:
-    container_name: matchbox-bot
-    image: ghcr.io/vidhanio/matchbox:latest
+    container_name: scheduletf-bot
+    image: ghcr.io/vidhanio/scheduletf:latest
     build: .
     environment:
       DISCORD_BOT_TOKEN: $DISCORD_BOT_TOKEN
@@ -11,7 +11,7 @@ services:
       DATABASE_URL: postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@database:5432/$POSTGRES_DB
 
   database:
-    container_name: matchbox-database
+    container_name: scheduletf-database
     image: postgres
     environment:
       POSTGRES_USER: $POSTGRES_USER
@@ -23,8 +23,8 @@ services:
       - 5432:5432
 networks:
   default:
-    name: matchbox-network
+    name: scheduletf-network
 volumes:
   database:
-    name: matchbox-database
+    name: scheduletf-database
     driver: local
