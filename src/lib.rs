@@ -109,17 +109,10 @@ impl EventHandler for Bot {
     async fn ready(&self, ctx: Context, _: Ready) {
         let commands = AllCommands::create_commands();
 
-        if self.config.guilds.is_empty() {
-            info!("no guilds configured, registering global commands");
-
-            match Command::set_global_commands(&ctx.http, commands).await {
-                Ok(commands) => info!(?commands, "registered global commands"),
-                Err(error) => error!(?error, "failed to register global commands"),
-            }
-        } else {
+        if let Some(guilds) = &self.config.guilds {
             info!(?self.config.guilds, "registering guild commands");
 
-            for guild in &self.config.guilds {
+            for guild in guilds {
                 match guild
                     .set_commands(&ctx.http, commands[..commands.len() - 1].to_vec())
                     .await
@@ -132,6 +125,13 @@ impl EventHandler for Bot {
             match Command::create_global_command(ctx, commands.last().unwrap().clone()).await {
                 Ok(command) => info!(?command, "registered global user command"),
                 Err(error) => error!(?error, "failed to register global user command"),
+            }
+        } else {
+            info!("no guilds configured, registering global commands");
+
+            match Command::set_global_commands(&ctx.http, commands).await {
+                Ok(commands) => info!(?commands, "registered global commands"),
+                Err(error) => error!(?error, "failed to register global commands"),
             }
         }
     }

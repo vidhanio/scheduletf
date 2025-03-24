@@ -7,10 +7,6 @@ image = 'registry.fly.io/scheduletf:latest'
 [env]
 PRODUCTION = 'true'
 
-[[mounts]]
-destination = '/data'
-source = 'scheduletf_data'
-
 [[vm]]
 cpu_kind = 'shared'
 cpus = 1

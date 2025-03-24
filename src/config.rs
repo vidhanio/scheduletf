@@ -10,7 +10,7 @@ use serenity::all::GuildId;
 pub struct Config {
     pub discord_bot_token: String,
     pub database_url: String,
-    pub guilds: HashSet<GuildId>,
+    pub guilds: Option<HashSet<GuildId>>,
     #[serde(default)]
     pub production: bool,
 }
