@@ -24,6 +24,7 @@ impl Config {
 impl Debug for Config {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Config")
+            .field("guilds", &self.guilds)
             .field("production", &self.production)
             .finish_non_exhaustive()
     }
