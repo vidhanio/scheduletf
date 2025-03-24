@@ -9,7 +9,7 @@ env:
   POSTGRES_PASSWORD: password
   POSTGRES_DB: scheduletf-ci
 
-  DATABASE_URL: postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost/$POSTGRES_DB
+  DATABASE_URL: postgres://vidhanio:password@localhost:5432/scheduletf-ci
 
 jobs:
   test:
