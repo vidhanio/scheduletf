@@ -10,4 +10,4 @@ PRODUCTION = 'true'
 [[vm]]
 cpu_kind = 'shared'
 cpus = 1
-memory = '1gb'
+memory = "256mb"
