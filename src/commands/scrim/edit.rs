@@ -111,7 +111,7 @@ edit_command! {
 
     "opposing team's contact"
     Opponent {
-        opponent: UserId,
+        opponent: Option<UserId>,
     },
 
     "game format of the scrim"
@@ -166,7 +166,7 @@ impl EditOpponentCommand {
         _: &team_guild::Model,
         mut scrim: Game<Scrim>,
     ) -> BotResult<game::ActiveModel> {
-        scrim.details.opponent_user_id = self.opponent.into();
+        scrim.details.opponent_user_id = self.opponent.map(Into::into);
 
         let mut active_model = scrim.into_active_model();
         active_model.reset(game::Column::OpponentUserId);

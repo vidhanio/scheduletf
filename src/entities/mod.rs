@@ -374,19 +374,23 @@ impl MapList {
             .unzip()
     }
 
-    pub fn list(&self, full: bool) -> String {
+    pub fn list(&self, full: bool) -> Option<String> {
         if self.is_empty() {
-            "Maps not set".to_owned()
+            None
         } else if full {
-            self.iter()
-                .map(|m| format!("`{m}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            Some(
+                self.iter()
+                    .map(|m| format!("`{m}`"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
         } else {
-            self.iter()
-                .map(Map::short_map_name)
-                .collect::<Vec<_>>()
-                .join(", ")
+            Some(
+                self.iter()
+                    .map(Map::short_map_name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
         }
     }
 }
@@ -406,9 +410,7 @@ impl FromStr for MapList {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(
-            s.split_whitespace()
-                .flat_map(|s| s.split(','))
-                .flat_map(|s| s.split('/'))
+            s.split(|c: char| c == ',' || c == '/' || c.is_whitespace())
                 .filter(|s| !s.is_empty())
                 .map(Map::new)
                 .collect(),

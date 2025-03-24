@@ -32,8 +32,7 @@ impl MigrationTrait for Migration {
                     )
                     .check(
                         // scrim
-                        ((Expr::col(Game::OpponentUserId).is_not_null())
-                            .and(Expr::col(Game::GameFormat).is_not_null())
+                        ((Expr::col(Game::GameFormat).is_not_null())
                             .and(Expr::col(Game::Maps).is_not_null())
                             .and(Expr::col(Game::RglMatchId).is_null()))
                         // match

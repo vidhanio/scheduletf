@@ -21,7 +21,7 @@ pub struct JoinCommand {
 
     /// Opposing team's contacted team member. Enter their user ID if they are
     /// not in the server.
-    opponent: UserId,
+    opponent: Option<UserId>,
 
     /// Space-separated list of maps to be played.
     #[command(autocomplete)]
@@ -57,7 +57,7 @@ impl JoinCommand {
                 .map(GameServer::Joined)
                 .unwrap_or_default(),
             details: Scrim {
-                opponent_user_id: self.opponent.into(),
+                opponent_user_id: self.opponent.map(Into::into),
                 game_format: self
                     .game_format
                     .or(guild.game_format)

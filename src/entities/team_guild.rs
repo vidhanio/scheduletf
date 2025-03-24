@@ -236,12 +236,15 @@ impl Model {
                                 let opponent =
                                     m.details.opponent_string(ctx, self.rgl_team_id).await?;
 
+                                let vs = opponent
+                                    .map(|opponent| format!(" vs. {opponent}"))
+                                    .unwrap_or_default();
+
                                 BotResult::Ok(AutocompleteChoice::new(
                                     format!(
-                                        "{}: {} vs. {}",
+                                        "{}: {}{vs}",
                                         m.timestamp.string_et_relative(),
                                         m.details.kind(),
-                                        opponent,
                                     ),
                                     m.timestamp.unix_timestamp(),
                                 ))

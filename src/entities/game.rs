@@ -95,7 +95,7 @@ impl Game {
         let kind = self.details.kind();
         let title = format!(
             "{} **{kind}:** {}",
-            kind.emoji(),
+            self.details.emoji(),
             self.timestamp.string_et()
         );
         let mut fields = vec![
@@ -108,19 +108,24 @@ impl Game {
                 .to_string(),
                 false,
             ),
-            ("Map(s)", self.details.maps().await?.list(true), false),
+            (
+                "Map(s)",
+                self.details
+                    .maps()
+                    .await?
+                    .list(true)
+                    .unwrap_or_else(|| "Not decided".into()),
+                false,
+            ),
         ];
 
         match &self.details {
             ScrimOrMatch::Scrim(scrim) => {
-                fields.extend([
-                    (
-                        "Opponent",
-                        scrim.opponent_user_id.mention().to_string(),
-                        true,
-                    ),
-                    ("Game Format", scrim.game_format.to_string(), true),
-                ]);
+                if let Some(opponent) = scrim.opponent_user_id {
+                    fields.push(("Opponent", opponent.mention().to_string(), true));
+                }
+
+                fields.push(("Game Format", scrim.game_format.to_string(), true));
             }
             ScrimOrMatch::Match(match_) => {
                 let rgl_match = RglMatch::get(match_.rgl_match_id).await?;
@@ -163,9 +168,9 @@ impl Game {
         let time = time_string(self.timestamp.time_et());
 
         let (kind, opponent) = match &self.details {
-            ScrimOrMatch::Scrim(scrim) => (
-                "Scrim".to_owned(),
-                scrim.opponent_user_id.mention().to_string(),
+            ScrimOrMatch::Scrim(scrim) => scrim.opponent_user_id.map_or_else(
+                || ("Looking for Scrim".to_owned(), None),
+                |opponent| ("Scrim".to_owned(), Some(opponent.mention().to_string())),
             ),
             ScrimOrMatch::Match(match_) => {
                 let rgl_team = guild.rgl_team_id()?;
@@ -176,10 +181,26 @@ impl Game {
 
                 (
                     format!("[Match]({})", match_.rgl_match_id.url()),
-                    format!("[{}]({})", opponent.team_name, opponent.team_id.url()),
+                    Some(format!(
+                        "[{}]({})",
+                        opponent.team_name,
+                        opponent.team_id.url()
+                    )),
                 )
             }
         };
+
+        let vs = opponent
+            .map(|opponent| format!(" vs. {opponent}"))
+            .unwrap_or_default();
+
+        let maps = self
+            .details
+            .maps()
+            .await?
+            .list(false)
+            .map(|maps| format!(" - {maps}"))
+            .unwrap_or_default();
 
         let (whitespace, connect_info) = if include_connect {
             (
@@ -193,9 +214,8 @@ impl Game {
         };
 
         Ok(format!(
-            "{} **{time}:** {kind} vs. {opponent} - {}{whitespace}{connect_info}",
-            self.details.kind().emoji(),
-            self.details.maps().await?.list(false),
+            "{} **{time}:** {kind}{vs}{maps}{whitespace}{connect_info}",
+            self.details.emoji(),
         ))
     }
 }
@@ -444,8 +464,13 @@ pub trait GameDetails: Into<ScrimOrMatch> + Sync + Sized {
 
     fn kind(&self) -> GameKind;
 
-    async fn opponent_string(&self, ctx: &Context, team_id: Option<RglTeamId>)
-    -> BotResult<String>;
+    async fn opponent_string(
+        &self,
+        ctx: &Context,
+        team_id: Option<RglTeamId>,
+    ) -> BotResult<Option<String>>;
+
+    fn emoji(&self) -> char;
 
     async fn maps(&self) -> BotResult<MapList>;
 
@@ -466,13 +491,11 @@ impl GameDetails for ScrimOrMatch {
         rgl_match_id: Option<RglMatchId>,
     ) -> Option<Self> {
         match (opponent_user_id, game_format, maps, rgl_match_id) {
-            (Some(opponent_user_id), Some(game_format), Some(maps), None) => {
-                Some(Self::Scrim(Scrim {
-                    opponent_user_id,
-                    game_format,
-                    maps,
-                }))
-            }
+            (opponent_user_id, Some(game_format), Some(maps), None) => Some(Self::Scrim(Scrim {
+                opponent_user_id,
+                game_format,
+                maps,
+            })),
             (None, None, None, Some(rgl_match_id)) => Some(Self::Match(Match { rgl_match_id })),
             _ => None,
         }
@@ -488,7 +511,7 @@ impl GameDetails for ScrimOrMatch {
     ) {
         match self {
             Self::Scrim(scrim) => (
-                Some(scrim.opponent_user_id),
+                scrim.opponent_user_id,
                 Some(scrim.game_format),
                 Some(scrim.maps),
                 None,
@@ -505,10 +528,17 @@ impl GameDetails for ScrimOrMatch {
         &self,
         ctx: &Context,
         team_id: Option<RglTeamId>,
-    ) -> BotResult<String> {
+    ) -> BotResult<Option<String>> {
         match self {
             Self::Scrim(scrim) => scrim.opponent_string(ctx, team_id).await,
             Self::Match(match_) => match_.opponent_string(ctx, team_id).await,
+        }
+    }
+
+    fn emoji(&self) -> char {
+        match self {
+            Self::Scrim(scrim) => scrim.emoji(),
+            Self::Match(match_) => match_.emoji(),
         }
     }
 
@@ -536,7 +566,7 @@ impl GameDetails for ScrimOrMatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scrim {
-    pub opponent_user_id: OpponentUserId,
+    pub opponent_user_id: Option<OpponentUserId>,
     pub game_format: GameFormat,
     pub maps: MapList,
 }
@@ -555,7 +585,7 @@ impl GameDetails for Scrim {
         rgl_match_id: Option<RglMatchId>,
     ) -> Option<Self> {
         match (opponent_user_id, game_format, maps, rgl_match_id) {
-            (Some(opponent_user_id), Some(game_format), Some(maps), None) => Some(Self {
+            (opponent_user_id, Some(game_format), Some(maps), None) => Some(Self {
                 opponent_user_id,
                 game_format,
                 maps,
@@ -573,7 +603,7 @@ impl GameDetails for Scrim {
         Option<RglMatchId>,
     ) {
         (
-            Some(self.opponent_user_id),
+            self.opponent_user_id,
             Some(self.game_format),
             Some(self.maps),
             None,
@@ -588,10 +618,24 @@ impl GameDetails for Scrim {
         GameKind::Scrim
     }
 
-    async fn opponent_string(&self, ctx: &Context, _: Option<RglTeamId>) -> BotResult<String> {
-        let user = self.opponent_user_id.to_user(ctx).await?;
+    async fn opponent_string(
+        &self,
+        ctx: &Context,
+        _: Option<RglTeamId>,
+    ) -> BotResult<Option<String>> {
+        if let Some(opponent_user_id) = self.opponent_user_id {
+            let user = opponent_user_id.to_user(ctx).await?;
+            Ok(Some(user.global_name.unwrap_or(user.name)))
+        } else {
+            Ok(None)
+        }
+    }
 
-        Ok(user.global_name.unwrap_or(user.name))
+    fn emoji(&self) -> char {
+        match self.opponent_user_id {
+            Some(_) => '🎯',
+            None => '🔍',
+        }
     }
 
     async fn maps(&self) -> BotResult<MapList> {
@@ -646,12 +690,20 @@ impl GameDetails for Match {
         GameKind::Match
     }
 
-    async fn opponent_string(&self, _: &Context, team_id: Option<RglTeamId>) -> BotResult<String> {
+    async fn opponent_string(
+        &self,
+        _: &Context,
+        team_id: Option<RglTeamId>,
+    ) -> BotResult<Option<String>> {
         let rgl_match = RglMatch::get(self.rgl_match_id).await?;
 
         let rgl_team = rgl_match.opponent_team(team_id.ok_or(BotError::NoRglTeam)?)?;
 
-        Ok(rgl_team.team_name)
+        Ok(Some(rgl_team.team_name))
+    }
+
+    fn emoji(&self) -> char {
+        '🏆'
     }
 
     async fn maps(&self) -> BotResult<MapList> {
@@ -680,13 +732,6 @@ impl GameKind {
         match self {
             Self::Scrim => "scrim",
             Self::Match => "match",
-        }
-    }
-
-    const fn emoji(self) -> char {
-        match self {
-            Self::Scrim => '🎯',
-            Self::Match => '🏆',
         }
     }
 }
