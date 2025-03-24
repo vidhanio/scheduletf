@@ -1,6 +1,6 @@
 use std::env;
 
-use matchbox::Config;
+use scheduletf::Config;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -14,7 +14,7 @@ async fn main() -> color_eyre::Result<()> {
     let fmt = tracing_subscriber::fmt().with_env_filter(
         env::var(EnvFilter::DEFAULT_ENV)
             .as_deref()
-            .unwrap_or("warn,matchbox=trace,sea_orm=debug"),
+            .unwrap_or("warn,scheduletf=trace,sea_orm=debug"),
     );
 
     if config.production {
@@ -23,7 +23,7 @@ async fn main() -> color_eyre::Result<()> {
         fmt.pretty().init();
     }
 
-    matchbox::run(config).await?;
+    scheduletf::run(config).await?;
 
     Ok(())
 }

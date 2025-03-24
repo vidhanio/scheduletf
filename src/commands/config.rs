@@ -60,7 +60,7 @@ config_commands! {
     ScheduleChannel { channel: ScheduleChannelId },
 
     "RGL team ID"
-    RglTeam { team_id: RglTeamId },
+    RglTeam { id: RglTeamId },
 }
 
 impl ConfigCommand {
@@ -98,7 +98,7 @@ impl ConfigCommand {
                     ConfigSetCommand::ScheduleChannel { channel } => {
                         guild.schedule_channel_id.set_if_not_equals(Some(channel));
                     }
-                    ConfigSetCommand::RglTeam { team_id } => {
+                    ConfigSetCommand::RglTeam { id: team_id } => {
                         guild.rgl_team_id.set_if_not_equals(Some(team_id));
 
                         let team = RglTeam::get(team_id).await?;

@@ -37,9 +37,9 @@ macro_rules! edit_command {
             $(
                 #[derive(Debug, SubCommand)]
                 pub struct [<Edit $name Command>] {
-                    /// The official to edit.
+                    /// The match to edit.
                     #[command(autocomplete)]
-                    official: OffsetDateTime,
+                    match_: OffsetDateTime,
 
                     #[doc = concat!("The new ", $doc, ".")]
                     $(#[$attr])*
@@ -61,24 +61,23 @@ macro_rules! edit_command {
 
                     let datetime = match &self {
                         $(
-                            Self::$name(cmd) => cmd.official,
+                            Self::$name(cmd) => cmd.match_,
                         )*
                     };
 
-                    let official = guild.get_game::<Match>(&tx, datetime).await?;
+                    let match_ = guild.get_game::<Match>(&tx, datetime).await?;
 
                     let game = match self {
                         $(
                             Self::$name(cmd) => {
-                                cmd.run(&guild, official).await?
+                                cmd.run(&guild, match_).await?
                             }
                         )*
                     }
                     .update(&tx)
                     .await?;
 
-                    let embed = Game::try_from(game)?.embed(guild.serveme_api_key.as_ref(), guild.rgl_team_id)
-                        .await?;
+                    let embed = Game::try_from(game)?.embed(&guild).await?;
 
                     guild.refresh_schedule(ctx, &tx).await?;
 
@@ -89,7 +88,7 @@ macro_rules! edit_command {
                             &ctx,
                             EditInteractionResponse::new()
                                 .embeds(vec![
-                                    success_embed("Official updated."),
+                                    success_embed("Match updated."),
                                     embed,
                                 ]),
                         )
@@ -118,21 +117,25 @@ impl EditReservationIdCommand {
     pub async fn run(
         self,
         guild: &team_guild::Model,
-        mut official: Game<Match>,
+        mut match_: Game<Match>,
     ) -> BotResult<game::ActiveModel> {
         if let Some(reservation_id) = self.reservation_id {
-            official.server = GameServer::Hosted(reservation_id);
-        } else if official.server.is_hosted() {
-            official.server = GameServer::Undecided;
+            match_.server = GameServer::Hosted(reservation_id);
+        } else if match_.server.is_hosted() {
+            match_.server = GameServer::Undecided;
         }
 
-        if official.server.is_hosted() {
+        if match_.server.is_hosted() {
             let api_key = guild.serveme_api_key()?;
 
-            official.edit_reservation(api_key).await?;
+            match_.edit_reservation(api_key).await?;
         }
 
-        Ok(official.server.into_active_model())
+        let mut active_model = match_.into_active_model();
+        active_model.reset(game::Column::ReservationId);
+        active_model.reset(game::Column::ConnectInfo);
+
+        Ok(active_model)
     }
 }
 
@@ -141,15 +144,18 @@ impl EditConnectInfoCommand {
     pub async fn run(
         self,
         _: &team_guild::Model,
-        mut official: Game<Match>,
+        mut match_: Game<Match>,
     ) -> BotResult<game::ActiveModel> {
         if let Some(connect_info) = self.connect_info {
-            official.server = GameServer::Joined(connect_info);
-        } else if official.server.is_joined() {
-            official.server = GameServer::Undecided;
+            match_.server = GameServer::Joined(connect_info);
+        } else if match_.server.is_joined() {
+            match_.server = GameServer::Undecided;
         }
 
-        Ok(official.server.into_active_model())
+        let mut active_model = match_.into_active_model();
+        active_model.reset(game::Column::ReservationId);
+
+        Ok(active_model)
     }
 }
 
@@ -167,7 +173,7 @@ impl EditCommandAutocomplete {
     }
 }
 
-macro_rules! impl_autocomplete_official {
+macro_rules! impl_autocomplete_match {
     ($($name:ident),*) => {
         paste! {
             $(
@@ -178,7 +184,7 @@ macro_rules! impl_autocomplete_official {
                         ctx: &Context,
                         interaction: &CommandInteraction,
                     ) -> BotResult {
-                        let Self::Official { official, .. } = self;
+                        let Self::Match { match_, .. } = self;
 
                         let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
@@ -186,7 +192,7 @@ macro_rules! impl_autocomplete_official {
                                 ctx,
                                 interaction,
                                 tx,
-                                &official,
+                                &match_,
                             )
                             .await
                     }
@@ -196,4 +202,4 @@ macro_rules! impl_autocomplete_official {
     };
 }
 
-impl_autocomplete_official!(ReservationId, ConnectInfo);
+impl_autocomplete_match!(ReservationId, ConnectInfo);

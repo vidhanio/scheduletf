@@ -10,7 +10,7 @@ pub fn split_datetime_query(query: &str) -> (String, String, String) {
     static REGEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^([a-z]+)?\s*(\d[a-z0-9]*)?$").unwrap());
 
-    let query = query.trim().to_ascii_lowercase();
+    let query = query.trim().to_lowercase();
 
     if let Some(captures) = REGEX.captures(&query) {
         let day = captures.get(1).map_or("", |m| m.as_str()).into();

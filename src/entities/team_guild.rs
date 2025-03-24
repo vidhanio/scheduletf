@@ -19,7 +19,7 @@ use serenity::{
 use time::{Date, Duration, OffsetDateTime, Time};
 
 use super::{
-    GameFormat, Maps, ReservationId, ScheduleChannelId, ScheduleMessageId, ServemeApiKey,
+    GameFormat, MapList, ReservationId, ScheduleChannelId, ScheduleMessageId, ServemeApiKey,
     TeamGuildId,
     game::{Game, GameDetails, Scrim},
 };
@@ -272,6 +272,7 @@ impl Model {
             .filter(
                 game::Column::Timestamp.gte(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT)),
             )
+            .filter(game::Column::ReservationId.is_not_null())
             .filter(Scrim::filter_expr())
             .select_only()
             .column(game::Column::ReservationId)
@@ -343,11 +344,9 @@ impl Model {
         game_format: Option<GameFormat>,
         query: &str,
     ) -> BotResult {
-        let query = query.trim();
-
         let game_format = game_format.or(self.game_format);
 
-        let mut maps = query.parse::<Maps>().unwrap();
+        let maps = query.parse::<MapList>().unwrap();
 
         let all_maps = MapsRequest::send(
             self.serveme_api_key
@@ -357,56 +356,15 @@ impl Model {
         )
         .await?;
 
-        let results = if maps.is_empty() {
-            all_maps
-                .iter()
-                .map(|map| AutocompleteChoice::new(map.as_str(), map.as_str()))
-                .take(25)
-                .collect()
-        } else if query.ends_with(',') {
-            all_maps
-                .iter()
-                .map(|map| {
-                    AutocompleteChoice::new(
-                        format!("{maps}, {map}"),
-                        format!("{},{map}", maps.autocomplete_value()),
-                    )
-                })
-                .take(25)
-                .collect()
-        } else {
-            let last_map = maps
-                .pop()
-                .expect("empty `maps` should be handled above")
-                .to_ascii_lowercase();
-
-            if maps.is_empty() {
-                all_maps
-                    .iter()
-                    .filter(|map| map.to_ascii_lowercase().contains(&last_map))
-                    .map(|map| AutocompleteChoice::new(map.as_str(), map.as_str()))
-                    .take(25)
-                    .collect()
-            } else {
-                all_maps
-                    .iter()
-                    .filter(|map| map.to_ascii_lowercase().contains(&last_map))
-                    .map(|map| {
-                        AutocompleteChoice::new(
-                            format!("{maps}, {map}"),
-                            format!("{},{map}", maps.autocomplete_value()),
-                        )
-                    })
-                    .take(25)
-                    .collect()
-            }
-        };
+        let trailing_sep =
+            query.ends_with(',') || query.ends_with('/') || query.ends_with(char::is_whitespace);
 
         interaction
             .create_response(
                 ctx,
                 CreateInteractionResponse::Autocomplete(
-                    CreateAutocompleteResponse::new().set_choices(results),
+                    CreateAutocompleteResponse::new()
+                        .set_choices(all_maps.autocomplete_choices(&maps, trailing_sep)),
                 ),
             )
             .await?;
@@ -432,10 +390,10 @@ impl Model {
             map.entry(date).or_default().push(game);
         }
 
-        let embed = CreateEmbed::new().title("Upcoming Matches");
+        let embed = CreateEmbed::new().title("🗓️ Schedule");
 
         let embed = if map.is_empty() {
-            embed.description("No upcoming matches.")
+            embed.description("No upcoming games.")
         } else {
             embed.fields(
                 stream::iter(map)
@@ -452,12 +410,7 @@ impl Model {
                             .and_then(async |(game, next_game)| {
                                 let include_connect = !next_game
                                     .is_some_and(|next_game| game.server == next_game.server);
-                                game.schedule_entry(
-                                    self.serveme_api_key.as_ref(),
-                                    self.rgl_team_id,
-                                    include_connect,
-                                )
-                                .await
+                                game.schedule_entry(self, include_connect).await
                             })
                             .try_collect::<String>()
                             .await?,
@@ -517,11 +470,13 @@ impl Model {
 
     pub fn config_embed(&self) -> CreateEmbed {
         CreateEmbed::new()
-            .title("scheduleTF Configuration")
+            .title("⚙️ Configuration")
             .field(
                 "RGL Team ID",
-                self.rgl_team_id
-                    .map_or_else(|| "Not set".to_owned(), |id| id.to_string()),
+                self.rgl_team_id.map_or_else(
+                    || "Not set".to_owned(),
+                    |id| format!("[`{id}`]({})", id.url()),
+                ),
                 true,
             )
             .field(

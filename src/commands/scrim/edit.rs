@@ -1,5 +1,5 @@
 use paste::paste;
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QuerySelect, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QuerySelect};
 use serenity::all::{CommandInteraction, Context, EditInteractionResponse, UserId};
 use serenity_commands::{SubCommand, SubCommandGroup};
 use time::OffsetDateTime;
@@ -7,7 +7,7 @@ use time::OffsetDateTime;
 use crate::{
     Bot, BotResult,
     entities::{
-        ConnectInfo, GameFormat, Maps, ReservationId,
+        ConnectInfo, GameFormat, MapList, ReservationId,
         game::{self, Game, GameServer, Scrim},
         team_guild,
     },
@@ -78,7 +78,7 @@ macro_rules! edit_command {
                     .update(&tx)
                     .await?;
 
-                    let embed = Game::try_from(game)?.embed(guild.serveme_api_key.as_ref(), None).await?;
+                    let embed = Game::try_from(game)?.embed(&guild).await?;
 
                     guild.refresh_schedule(ctx, &tx).await?;
 
@@ -122,7 +122,7 @@ edit_command! {
     "maps to be played"
     Maps {
         #[command(autocomplete)]
-        maps: Option<Maps>,
+        maps: Option<MapList>,
     },
 
     "reservation ID of the server"
@@ -139,31 +139,61 @@ edit_command! {
 
 impl EditDateTimeCommand {
     #[allow(clippy::unused_async)]
-    pub async fn run(self, _: &team_guild::Model, _: Game<Scrim>) -> BotResult<game::ActiveModel> {
-        Ok(game::ActiveModel {
-            timestamp: Set(self.date_time),
-            ..Default::default()
-        })
+    pub async fn run(
+        self,
+        guild: &team_guild::Model,
+        mut scrim: Game<Scrim>,
+    ) -> BotResult<game::ActiveModel> {
+        scrim.timestamp = self.date_time;
+
+        if scrim.server.is_hosted() {
+            let api_key = guild.serveme_api_key()?;
+
+            scrim.edit_reservation(api_key).await?;
+        }
+
+        let mut active_model = scrim.into_active_model();
+        active_model.reset(game::Column::Timestamp);
+
+        Ok(active_model)
     }
 }
 
 impl EditOpponentCommand {
     #[allow(clippy::unused_async)]
-    pub async fn run(self, _: &team_guild::Model, _: Game<Scrim>) -> BotResult<game::ActiveModel> {
-        Ok(game::ActiveModel {
-            opponent_user_id: Set(Some(self.opponent.into())),
-            ..Default::default()
-        })
+    pub async fn run(
+        self,
+        _: &team_guild::Model,
+        mut scrim: Game<Scrim>,
+    ) -> BotResult<game::ActiveModel> {
+        scrim.details.opponent_user_id = self.opponent.into();
+
+        let mut active_model = scrim.into_active_model();
+        active_model.reset(game::Column::OpponentUserId);
+
+        Ok(active_model)
     }
 }
 
 impl EditGameFormatCommand {
     #[allow(clippy::unused_async)]
-    pub async fn run(self, _: &team_guild::Model, _: Game<Scrim>) -> BotResult<game::ActiveModel> {
-        Ok(game::ActiveModel {
-            game_format: Set(Some(self.game_format)),
-            ..Default::default()
-        })
+    pub async fn run(
+        self,
+        guild: &team_guild::Model,
+        mut scrim: Game<Scrim>,
+    ) -> BotResult<game::ActiveModel> {
+        scrim.details.game_format = self.game_format;
+
+        if scrim.server.is_hosted() {
+            let api_key = guild.serveme_api_key()?;
+
+            scrim.edit_reservation(api_key).await?;
+        }
+
+        let mut active_model = scrim.into_active_model();
+        active_model.reset(game::Column::GameFormat);
+
+        Ok(active_model)
     }
 }
 
@@ -181,10 +211,10 @@ impl EditMapsCommand {
             scrim.edit_reservation(api_key).await?;
         }
 
-        Ok(game::ActiveModel {
-            maps: Set(Some(scrim.details.maps)),
-            ..Default::default()
-        })
+        let mut active_model = scrim.into_active_model();
+        active_model.reset(game::Column::Maps);
+
+        Ok(active_model)
     }
 }
 
@@ -206,7 +236,11 @@ impl EditReservationIdCommand {
             scrim.edit_reservation(api_key).await?;
         }
 
-        Ok(scrim.server.into_active_model())
+        let mut active_model = scrim.into_active_model();
+        active_model.reset(game::Column::ReservationId);
+        active_model.reset(game::Column::ConnectInfo);
+
+        Ok(active_model)
     }
 }
 
@@ -223,7 +257,11 @@ impl EditConnectInfoCommand {
             scrim.server = GameServer::Undecided;
         }
 
-        Ok(scrim.server.into_active_model())
+        let mut active_model = scrim.into_active_model();
+        active_model.reset(game::Column::ReservationId);
+        active_model.reset(game::Column::ConnectInfo);
+
+        Ok(active_model)
     }
 }
 

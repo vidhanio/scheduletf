@@ -23,11 +23,7 @@ impl ShowCommand {
 
         let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        let embed = guild
-            .get_game(&tx, self.game)
-            .await?
-            .embed(guild.serveme_api_key.as_ref(), guild.rgl_team_id)
-            .await?;
+        let embed = guild.get_game(&tx, self.game).await?.embed(&guild).await?;
 
         tx.commit().await?;
 

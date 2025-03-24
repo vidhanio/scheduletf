@@ -6,8 +6,8 @@ use std::{
 use migration::SimpleExpr;
 use rand::distr::{Alphanumeric, SampleString};
 use sea_orm::{
-    DbErr, FromQueryResult, IntoActiveModel, PartialModelTrait, QueryResult, Set,
-    entity::prelude::*,
+    ActiveValue::Unchanged, DbErr, FromQueryResult, IntoActiveModel, PartialModelTrait,
+    QueryResult, entity::prelude::*,
 };
 use serenity::all::{
     Context, CreateEmbed, FormattedTimestamp, FormattedTimestampStyle, Mentionable,
@@ -16,15 +16,16 @@ use serenity_commands::BasicOption;
 use time::{Duration, OffsetDateTime};
 
 use super::{
-    ConnectInfo, GameFormat, Maps, OpponentUserId, ReservationId, ServemeApiKey, TeamGuildId,
+    ConnectInfo, GameFormat, MapList, OpponentUserId, ReservationId, ServemeApiKey, TeamGuildId,
+    team_guild,
 };
 use crate::{
     BotResult,
     error::BotError,
     rgl::{RglMatch, RglMatchId, RglSeason, RglTeamId},
     serveme::{
-        CreateReservationRequest, DeleteReservationRequest, EditReservationRequest,
-        FindServersRequest, GetReservationRequest, ReservationResponse,
+        CreateReservationRequest, EditReservationRequest, FindServersRequest,
+        GetReservationRequest, ReservationResponse,
     },
     utils::{OffsetDateTimeEtExt, time_string},
 };
@@ -40,7 +41,7 @@ pub struct Model {
     pub connect_info: Option<ConnectInfo>,
     pub opponent_user_id: Option<OpponentUserId>,
     pub game_format: Option<GameFormat>,
-    pub maps: Option<Maps>,
+    pub maps: Option<MapList>,
     pub rgl_match_id: Option<RglMatchId>,
 }
 
@@ -73,7 +74,7 @@ struct GameInner {
     connect_info: Option<ConnectInfo>,
     opponent_user_id: Option<OpponentUserId>,
     game_format: Option<GameFormat>,
-    maps: Option<Maps>,
+    maps: Option<MapList>,
     rgl_match_id: Option<RglMatchId>,
 }
 
@@ -86,15 +87,15 @@ pub struct Game<D = ScrimOrMatch> {
 }
 
 impl Game {
-    pub async fn embed(
-        &self,
-        api_key: Option<&ServemeApiKey>,
-        rgl_team: Option<RglTeamId>,
-    ) -> BotResult<CreateEmbed> {
-        let description = self.server.connect_info_block(api_key).await?;
+    pub async fn embed(&self, guild: &team_guild::Model) -> BotResult<CreateEmbed> {
+        let description = self
+            .server
+            .connect_info_block(guild.serveme_api_key.as_ref())
+            .await?;
+        let kind = self.details.kind();
         let title = format!(
-            "**{}:** {}",
-            self.details.kind(),
+            "{} **{kind}:** {}",
+            kind.emoji(),
             self.timestamp.string_et()
         );
         let mut fields = vec![
@@ -107,7 +108,7 @@ impl Game {
                 .to_string(),
                 false,
             ),
-            ("Map(s)", self.details.maps().await?.list(), false),
+            ("Map(s)", self.details.maps().await?.list(true), false),
         ];
 
         match &self.details {
@@ -123,7 +124,7 @@ impl Game {
             }
             ScrimOrMatch::Match(match_) => {
                 let rgl_match = RglMatch::get(match_.rgl_match_id).await?;
-                let opponent = rgl_match.opponent_team(rgl_team.ok_or(BotError::NoRglTeam)?)?;
+                let opponent = rgl_match.opponent_team(guild.rgl_team_id()?)?;
 
                 fields.extend([
                     (
@@ -156,8 +157,7 @@ impl Game {
 
     pub async fn schedule_entry(
         &self,
-        api_key: Option<&ServemeApiKey>,
-        rgl_team: Option<RglTeamId>,
+        guild: &team_guild::Model,
         include_connect: bool,
     ) -> BotResult<String> {
         let time = time_string(self.timestamp.time_et());
@@ -168,7 +168,7 @@ impl Game {
                 scrim.opponent_user_id.mention().to_string(),
             ),
             ScrimOrMatch::Match(match_) => {
-                let rgl_team = rgl_team.ok_or(BotError::NoRglTeam)?;
+                let rgl_team = guild.rgl_team_id()?;
 
                 let rgl_match = RglMatch::get(match_.rgl_match_id).await?;
 
@@ -181,15 +181,21 @@ impl Game {
             }
         };
 
-        let connect_info = if include_connect {
-            self.server.connect_info_block(api_key).await?
+        let (whitespace, connect_info) = if include_connect {
+            (
+                ' ',
+                self.server
+                    .connect_info_block(guild.serveme_api_key.as_ref())
+                    .await?,
+            )
         } else {
-            "\n".into()
+            ('\n', String::new())
         };
 
         Ok(format!(
-            "**{time}:** {kind} vs. {opponent} ({}){connect_info}",
-            self.details.maps().await?.list(),
+            "{} **{time}:** {kind} vs. {opponent} - {}{whitespace}{connect_info}",
+            self.details.kind().emoji(),
+            self.details.maps().await?.list(false),
         ))
     }
 }
@@ -235,24 +241,23 @@ impl<D: GameDetails> Game<D> {
             .ok_or(BotError::NoServemeServers)?
             .id;
 
+        let kind = self.details.kind();
+
         let (first_map, server_config_id) = self
             .details
             .maps()
             .await?
-            .server_config(self.details.kind(), self.details.game_format().await?);
+            .server_config(kind, self.details.game_format().await?);
 
-        let kind_prefix = match self.details.kind() {
-            GameKind::Scrim => "scrim",
-            GameKind::Match => "match",
-        };
+        let prefix = kind.prefix();
 
         let password = format!(
-            "{kind_prefix}.{}",
+            "{prefix}.{}",
             Alphanumeric.sample_string(&mut rand::rng(), 8)
         );
 
         let rcon = format!(
-            "{kind_prefix}.rcon.{}",
+            "{prefix}.rcon.{}",
             Alphanumeric.sample_string(&mut rand::rng(), 32)
         );
 
@@ -297,23 +302,18 @@ impl<D: GameDetails> Game<D> {
         let starts_at = (starts_at < reservation.starts_at).then_some(starts_at);
         let ends_at = (ends_at > reservation.ends_at).then_some(ends_at);
 
-        EditReservationRequest {
+        let req = EditReservationRequest {
             starts_at,
             ends_at,
             first_map,
             server_config_id,
+        };
+
+        if req == EditReservationRequest::default() {
+            return Ok(reservation);
         }
-        .send(api_key, reservation_id)
-        .await
-    }
 
-    pub async fn delete_reservation(
-        &self,
-        api_key: &ServemeApiKey,
-    ) -> BotResult<Option<ReservationResponse>> {
-        let reservation_id = self.server.reservation_id()?;
-
-        DeleteReservationRequest::send(api_key, reservation_id).await
+        req.send(api_key, reservation_id).await
     }
 }
 
@@ -392,32 +392,32 @@ impl<D: GameDetails> FromQueryResult for Game<D> {
 impl<D: GameDetails> IntoActiveModel<ActiveModel> for Game<D> {
     fn into_active_model(self) -> ActiveModel {
         let mut active_model = ActiveModel {
-            guild_id: Set(self.guild_id),
-            timestamp: Set(self.timestamp),
+            guild_id: Unchanged(self.guild_id),
+            timestamp: Unchanged(self.timestamp),
             ..Default::default()
         };
 
         match self.server {
             GameServer::Hosted(reservation_id) => {
-                active_model.reservation_id = Set(Some(reservation_id));
-                active_model.connect_info = Set(None);
+                active_model.reservation_id = Unchanged(Some(reservation_id));
+                active_model.connect_info = Unchanged(None);
             }
             GameServer::Joined(connect_info) => {
-                active_model.reservation_id = Set(None);
-                active_model.connect_info = Set(Some(connect_info));
+                active_model.reservation_id = Unchanged(None);
+                active_model.connect_info = Unchanged(Some(connect_info));
             }
             GameServer::Undecided => {
-                active_model.reservation_id = Set(None);
-                active_model.connect_info = Set(None);
+                active_model.reservation_id = Unchanged(None);
+                active_model.connect_info = Unchanged(None);
             }
         }
 
         let (opponent_user_id, game_format, maps, rgl_match_id) = self.details.into_parts();
 
-        active_model.opponent_user_id = Set(opponent_user_id);
-        active_model.game_format = Set(game_format);
-        active_model.maps = Set(maps);
-        active_model.rgl_match_id = Set(rgl_match_id);
+        active_model.opponent_user_id = Unchanged(opponent_user_id);
+        active_model.game_format = Unchanged(game_format);
+        active_model.maps = Unchanged(maps);
+        active_model.rgl_match_id = Unchanged(rgl_match_id);
 
         active_model
     }
@@ -427,7 +427,7 @@ pub trait GameDetails: Into<ScrimOrMatch> + Sync + Sized {
     fn from_parts(
         opponent_user_id: Option<OpponentUserId>,
         game_format: Option<GameFormat>,
-        maps: Option<Maps>,
+        maps: Option<MapList>,
         rgl_match_id: Option<RglMatchId>,
     ) -> Option<Self>;
 
@@ -436,21 +436,9 @@ pub trait GameDetails: Into<ScrimOrMatch> + Sync + Sized {
     ) -> (
         Option<OpponentUserId>,
         Option<GameFormat>,
-        Option<Maps>,
+        Option<MapList>,
         Option<RglMatchId>,
     );
-
-    fn details_active_model(self) -> ActiveModel {
-        let (opponent_user_id, game_format, maps, rgl_match_id) = self.into_parts();
-
-        ActiveModel {
-            opponent_user_id: Set(opponent_user_id),
-            game_format: Set(game_format),
-            maps: Set(maps),
-            rgl_match_id: Set(rgl_match_id),
-            ..Default::default()
-        }
-    }
 
     fn filter_expr() -> SimpleExpr;
 
@@ -459,7 +447,7 @@ pub trait GameDetails: Into<ScrimOrMatch> + Sync + Sized {
     async fn opponent_string(&self, ctx: &Context, team_id: Option<RglTeamId>)
     -> BotResult<String>;
 
-    async fn maps(&self) -> BotResult<Maps>;
+    async fn maps(&self) -> BotResult<MapList>;
 
     async fn game_format(&self) -> BotResult<GameFormat>;
 }
@@ -474,7 +462,7 @@ impl GameDetails for ScrimOrMatch {
     fn from_parts(
         opponent_user_id: Option<OpponentUserId>,
         game_format: Option<GameFormat>,
-        maps: Option<Maps>,
+        maps: Option<MapList>,
         rgl_match_id: Option<RglMatchId>,
     ) -> Option<Self> {
         match (opponent_user_id, game_format, maps, rgl_match_id) {
@@ -495,7 +483,7 @@ impl GameDetails for ScrimOrMatch {
     ) -> (
         Option<OpponentUserId>,
         Option<GameFormat>,
-        Option<Maps>,
+        Option<MapList>,
         Option<RglMatchId>,
     ) {
         match self {
@@ -531,7 +519,7 @@ impl GameDetails for ScrimOrMatch {
         }
     }
 
-    async fn maps(&self) -> BotResult<Maps> {
+    async fn maps(&self) -> BotResult<MapList> {
         match self {
             Self::Scrim(scrim) => scrim.maps().await,
             Self::Match(match_) => match_.maps().await,
@@ -546,17 +534,11 @@ impl GameDetails for ScrimOrMatch {
     }
 }
 
-impl IntoActiveModel<ActiveModel> for ScrimOrMatch {
-    fn into_active_model(self) -> ActiveModel {
-        self.details_active_model()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scrim {
     pub opponent_user_id: OpponentUserId,
     pub game_format: GameFormat,
-    pub maps: Maps,
+    pub maps: MapList,
 }
 
 impl From<Scrim> for ScrimOrMatch {
@@ -569,7 +551,7 @@ impl GameDetails for Scrim {
     fn from_parts(
         opponent_user_id: Option<OpponentUserId>,
         game_format: Option<GameFormat>,
-        maps: Option<Maps>,
+        maps: Option<MapList>,
         rgl_match_id: Option<RglMatchId>,
     ) -> Option<Self> {
         match (opponent_user_id, game_format, maps, rgl_match_id) {
@@ -587,7 +569,7 @@ impl GameDetails for Scrim {
     ) -> (
         Option<OpponentUserId>,
         Option<GameFormat>,
-        Option<Maps>,
+        Option<MapList>,
         Option<RglMatchId>,
     ) {
         (
@@ -612,18 +594,12 @@ impl GameDetails for Scrim {
         Ok(user.global_name.unwrap_or(user.name))
     }
 
-    async fn maps(&self) -> BotResult<Maps> {
+    async fn maps(&self) -> BotResult<MapList> {
         Ok(self.maps.clone())
     }
 
     async fn game_format(&self) -> BotResult<GameFormat> {
         Ok(self.game_format)
-    }
-}
-
-impl IntoActiveModel<ActiveModel> for Scrim {
-    fn into_active_model(self) -> ActiveModel {
-        self.details_active_model()
     }
 }
 
@@ -642,7 +618,7 @@ impl GameDetails for Match {
     fn from_parts(
         opponent_user_id: Option<OpponentUserId>,
         game_format: Option<GameFormat>,
-        maps: Option<Maps>,
+        maps: Option<MapList>,
         rgl_match_id: Option<RglMatchId>,
     ) -> Option<Self> {
         match (opponent_user_id, game_format, maps, rgl_match_id) {
@@ -656,7 +632,7 @@ impl GameDetails for Match {
     ) -> (
         Option<OpponentUserId>,
         Option<GameFormat>,
-        Option<Maps>,
+        Option<MapList>,
         Option<RglMatchId>,
     ) {
         (None, None, None, Some(self.rgl_match_id))
@@ -678,10 +654,10 @@ impl GameDetails for Match {
         Ok(rgl_team.team_name)
     }
 
-    async fn maps(&self) -> BotResult<Maps> {
+    async fn maps(&self) -> BotResult<MapList> {
         let rgl_match = RglMatch::get(self.rgl_match_id).await?;
 
-        Ok(Maps(
+        Ok(MapList(
             rgl_match.maps.iter().map(|m| m.map_name.clone()).collect(),
         ))
     }
@@ -693,16 +669,26 @@ impl GameDetails for Match {
     }
 }
 
-impl IntoActiveModel<ActiveModel> for Match {
-    fn into_active_model(self) -> ActiveModel {
-        self.details_active_model()
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameKind {
     Scrim,
     Match,
+}
+
+impl GameKind {
+    const fn prefix(self) -> &'static str {
+        match self {
+            Self::Scrim => "scrim",
+            Self::Match => "match",
+        }
+    }
+
+    const fn emoji(self) -> char {
+        match self {
+            Self::Scrim => '🎯',
+            Self::Match => '🏆',
+        }
+    }
 }
 
 impl Display for GameKind {
@@ -729,10 +715,6 @@ impl GameServer {
 
     pub const fn is_joined(&self) -> bool {
         matches!(self, Self::Joined(_))
-    }
-
-    pub const fn is_undecided(&self) -> bool {
-        matches!(self, Self::Undecided)
     }
 
     pub const fn reservation_id(&self) -> BotResult<ReservationId> {
@@ -787,27 +769,5 @@ impl BasicOption for GameServer {
                     })
             },
         )
-    }
-}
-
-impl IntoActiveModel<ActiveModel> for GameServer {
-    fn into_active_model(self) -> ActiveModel {
-        match self {
-            Self::Hosted(reservation_id) => ActiveModel {
-                reservation_id: Set(Some(reservation_id)),
-                connect_info: Set(None),
-                ..Default::default()
-            },
-            Self::Joined(connect_info) => ActiveModel {
-                reservation_id: Set(None),
-                connect_info: Set(Some(connect_info)),
-                ..Default::default()
-            },
-            Self::Undecided => ActiveModel {
-                reservation_id: Set(None),
-                connect_info: Set(None),
-                ..Default::default()
-            },
-        }
     }
 }

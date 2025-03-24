@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use crate::{
     Bot, BotResult,
     entities::{
-        GameFormat, Maps, ReservationId,
+        GameFormat, MapList, ReservationId,
         game::{Game, GameServer, Scrim},
     },
     error::BotError,
@@ -23,9 +23,9 @@ pub struct HostCommand {
     /// not in the server.
     opponent: UserId,
 
-    /// Comma-separated list of maps to be played.
+    /// Space-separated list of maps to be played.
     #[command(autocomplete)]
-    maps: Option<Maps>,
+    maps: Option<MapList>,
 
     /// The game format of the scrim. Defaults to the guild's default game
     /// format.
@@ -78,7 +78,7 @@ impl HostCommand {
 
         let game = Game::try_from(game.into_active_model().insert(&tx).await?)?;
 
-        let embed = game.embed(Some(serveme_api_key), None).await?;
+        let embed = game.embed(&guild).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 

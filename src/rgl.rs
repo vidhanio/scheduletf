@@ -174,7 +174,6 @@ impl RglTeam {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RglMatch {
-    pub match_id: RglMatchId,
     pub season_id: SeasonId,
     #[serde(with = "time::serde::iso8601")]
     pub match_date: OffsetDateTime,
@@ -408,12 +407,6 @@ impl Nullable for RglTeamId {
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
 pub struct SeasonId(pub i32);
-
-impl SeasonId {
-    pub fn url(self) -> String {
-        format!("https://rgl.gg/Public/LeagueTable?s={self}")
-    }
-}
 
 impl Display for SeasonId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

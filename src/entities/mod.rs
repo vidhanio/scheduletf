@@ -1,6 +1,5 @@
 use std::{
-    cmp::Ordering,
-    collections::HashSet,
+    collections::BTreeMap,
     convert::Infallible,
     fmt::{self, Display, Formatter},
     ops::{Deref, DerefMut},
@@ -17,7 +16,8 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serenity::all::{
-    ChannelId, ChannelType, CommandDataOptionValue, CreateCommandOption, GuildId, MessageId, UserId,
+    AutocompleteChoice, ChannelId, ChannelType, CommandDataOptionValue, CreateCommandOption,
+    GuildId, MessageId, UserId,
 };
 use serenity_commands::BasicOption;
 
@@ -356,32 +356,42 @@ impl Nullable for ReservationId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Maps(pub Vec<Map>);
+pub struct MapList(pub Vec<Map>);
 
-impl Maps {
+impl MapList {
+    pub fn autocomplete_choice<'a>(this: impl IntoIterator<Item = &'a Map>) -> AutocompleteChoice {
+        let maps = this.into_iter().map(Map::as_str).collect::<Vec<_>>();
+
+        let name = maps.join(", ");
+        let value = maps.join(",");
+
+        AutocompleteChoice::new(name, value)
+    }
+
     pub fn server_config(&self, kind: GameKind, format: GameFormat) -> (Option<Map>, Option<u32>) {
         self.first()
             .and_then(|m| Some((m.clone(), m.config(kind, format)?.id)))
             .unzip()
     }
 
-    pub fn list(&self) -> String {
+    pub fn list(&self, full: bool) -> String {
         if self.is_empty() {
             "Maps not set".to_owned()
-        } else {
+        } else if full {
             self.iter()
                 .map(|m| format!("`{m}`"))
                 .collect::<Vec<_>>()
                 .join(", ")
+        } else {
+            self.iter()
+                .map(Map::short_map_name)
+                .collect::<Vec<_>>()
+                .join(", ")
         }
-    }
-
-    pub fn autocomplete_value(&self) -> String {
-        self.iter().map(Map::as_str).collect::<Vec<_>>().join(",")
     }
 }
 
-impl Display for Maps {
+impl Display for MapList {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.iter()
             .map(Map::as_str)
@@ -391,22 +401,22 @@ impl Display for Maps {
     }
 }
 
-impl FromStr for Maps {
+impl FromStr for MapList {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(
-            s.split(',')
-                .filter_map(|s| {
-                    let s = s.trim();
-                    (!s.is_empty()).then(|| Map::new(s))
-                })
+            s.split_whitespace()
+                .flat_map(|s| s.split(','))
+                .flat_map(|s| s.split('/'))
+                .filter(|s| !s.is_empty())
+                .map(Map::new)
                 .collect(),
         ))
     }
 }
 
-impl Deref for Maps {
+impl Deref for MapList {
     type Target = Vec<Map>;
 
     fn deref(&self) -> &Self::Target {
@@ -414,13 +424,13 @@ impl Deref for Maps {
     }
 }
 
-impl DerefMut for Maps {
+impl DerefMut for MapList {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl BasicOption for Maps {
+impl BasicOption for MapList {
     type Partial = String;
 
     fn create_option(
@@ -437,8 +447,8 @@ impl BasicOption for Maps {
     }
 }
 
-impl From<Maps> for Value {
-    fn from(source: Maps) -> Self {
+impl From<MapList> for Value {
+    fn from(source: MapList) -> Self {
         Self::Array(
             ArrayType::String,
             Some(Box::new(
@@ -452,14 +462,14 @@ impl From<Maps> for Value {
     }
 }
 
-impl TryGetable for Maps {
+impl TryGetable for MapList {
     fn try_get_by<I: ColIdx>(res: &QueryResult, idx: I) -> Result<Self, TryGetError> {
         <Vec<String> as TryGetable>::try_get_by(res, idx)
             .map(|v| Self(v.into_iter().map(Map).collect()))
     }
 }
 
-impl ValueType for Maps {
+impl ValueType for MapList {
     fn try_from(v: Value) -> Result<Self, ValueTypeErr> {
         <Vec<String> as ValueType>::try_from(v).map(|v| Self(v.into_iter().map(Map).collect()))
     }
@@ -477,47 +487,52 @@ impl ValueType for Maps {
     }
 }
 
-impl Nullable for Maps {
+impl Nullable for MapList {
     fn null() -> Value {
         <Vec<String> as Nullable>::null()
     }
 }
 
-static SIXES_MAPS: LazyLock<HashSet<Map>> = LazyLock::new(|| {
+static SIXES_MAPS: LazyLock<BTreeMap<Map, &'static str>> = LazyLock::new(|| {
     [
-        "cp_gullywash_f9",
-        "cp_metalworks_f5",
-        "cp_process_f12",
-        "cp_snakewater_final1",
-        "cp_sultry_b8a",
-        "cp_sunshine",
-        "koth_bagel_rc10",
-        "koth_clearcut_b17",
-        "cp_granary_pro_rc8",
-        "koth_product_final",
+        ("cp_gullywash_f9", "Gullywash"),
+        ("cp_metalworks_f5", "Metalworks"),
+        ("cp_process_f12", "Process"),
+        ("cp_snakewater_final1", "Snakewater"),
+        ("cp_sultry_b8a", "Sultry"),
+        ("cp_sunshine", "Sunshine"),
+        ("koth_bagel_rc10", "Bagel"),
+        ("koth_clearcut_b17", "Clearcut"),
+        ("cp_granary_pro_rc8", "Granary"),
+        ("koth_product_final", "Product"),
     ]
     .into_iter()
-    .map(Map::new)
+    .map(|(map, title)| (Map::new(map), title))
     .collect()
 });
 
-static HL_MAPS: LazyLock<HashSet<Map>> = LazyLock::new(|| {
+static HL_MAPS: LazyLock<BTreeMap<Map, &'static str>> = LazyLock::new(|| {
     [
-        "cp_steel_f12",
-        "koth_ashville_final1",
-        "koth_lakeside_f5",
-        "koth_product_final",
-        "pl_swiftwater_final1",
-        "pl_upward_f12",
-        "pl_vigil_rc10",
+        ("cp_steel_f12", "Steel"),
+        ("koth_ashville_final1", "Ashville"),
+        ("koth_lakeside_f5", "Lakeside"),
+        ("koth_product_final", "Product"),
+        ("pl_swiftwater_final1", "Swiftwater"),
+        ("pl_upward_f12", "Upward"),
+        ("pl_vigil_rc10", "Vigil"),
     ]
     .into_iter()
-    .map(Map::new)
+    .map(|(map, title)| (Map::new(map), title))
     .collect()
 });
 
-static ALL_MAPS: LazyLock<HashSet<Map>> =
-    LazyLock::new(|| SIXES_MAPS.union(&HL_MAPS).cloned().collect());
+static ALL_MAPS: LazyLock<BTreeMap<Map, &'static str>> = LazyLock::new(|| {
+    SIXES_MAPS
+        .iter()
+        .map(|(map, title)| (map.clone(), *title))
+        .chain(HL_MAPS.iter().map(|(map, title)| (map.clone(), *title)))
+        .collect()
+});
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, DeriveValueType, Serialize, Deserialize,
@@ -533,6 +548,12 @@ impl Map {
     #[allow(clippy::missing_const_for_fn)]
     pub fn as_str(&self) -> &str {
         self
+    }
+
+    pub fn short_map_name(&self) -> String {
+        ALL_MAPS
+            .get(self)
+            .map_or_else(|| format!("`{self}`"), |&title| title.to_owned())
     }
 
     pub fn config(&self, kind: GameKind, format: GameFormat) -> Option<ServerConfig> {
@@ -576,26 +597,16 @@ impl Map {
         }
     }
 
-    pub fn is_official(&self, game_format: Option<GameFormat>) -> bool {
+    pub fn official_maps(game_format: Option<GameFormat>) -> &'static BTreeMap<Self, &'static str> {
         match game_format {
             Some(GameFormat::Sixes) => &SIXES_MAPS,
             Some(GameFormat::Highlander) => &HL_MAPS,
             None => &ALL_MAPS,
         }
-        .contains(self)
     }
 
-    pub fn cmp_with_format(&self, other: &Self, game_format: Option<GameFormat>) -> Ordering {
-        match (
-            self.is_official(game_format),
-            other.is_official(game_format),
-        ) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            (true, true) | (false, false) => {
-                self.to_ascii_lowercase().cmp(&other.to_ascii_lowercase())
-            }
-        }
+    pub fn is_official(&self, game_format: Option<GameFormat>) -> bool {
+        Self::official_maps(game_format).contains_key(self)
     }
 }
 

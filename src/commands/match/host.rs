@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Clone, Debug, SubCommand)]
 pub struct HostCommand {
-    /// The match ID of the RGL official.
+    /// The ID of the RGL.gg match to host.
     match_id: RglMatchId,
 
     /// An existing reservation to set up and modify. If not provided, a new
@@ -60,7 +60,7 @@ impl HostCommand {
 
         let game = Game::try_from(game.into_active_model().insert(&tx).await?)?;
 
-        let embed = game.embed(Some(serveme_api_key), guild.rgl_team_id).await?;
+        let embed = game.embed(&guild).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 
@@ -70,7 +70,7 @@ impl HostCommand {
             .edit_response(
                 &ctx,
                 EditInteractionResponse::new()
-                    .embeds(vec![success_embed("Official scheduled."), embed]),
+                    .embeds(vec![success_embed("Match scheduled."), embed]),
             )
             .await?;
 

@@ -37,10 +37,10 @@ pub enum BotError {
     #[error("Invalid connect info.")]
     InvalidConnectInfo,
 
-    #[error("Invalid reservation id.")]
+    #[error("Invalid reservation ID.")]
     InvalidReservationId,
 
-    #[error("Invalid game server (reservation id/connect info).")]
+    #[error("Invalid game server (reservation ID/connect info).")]
     InvalidGameServer,
 
     #[error("Time slot already taken.")]

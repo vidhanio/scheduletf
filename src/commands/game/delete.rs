@@ -37,9 +37,7 @@ impl DeleteCommand {
             return Err(BotError::GameNotFound);
         };
 
-        let embed = Game::try_from(game)?
-            .embed(guild.serveme_api_key.as_ref(), guild.rgl_team_id)
-            .await?;
+        let embed = Game::try_from(game)?.embed(&guild).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 

@@ -3,7 +3,7 @@ name = "scheduletf"
 
 authors = ["Vidhan Bhatt <me@vidhan.io>"]
 edition = "2024"
-license = "MIT"
+license = "AGPL-3.0"
 publish = false
 version = "0.1.0"
 
@@ -20,6 +20,7 @@ envy = "0.4"
 moka = { version = "0.12.10", features = ["future"] }
 paste = "1"
 rand = "0.9.0"
+regex = "1.11.1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
@@ -56,7 +57,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tz-rs = "0.7"
 tzdb = "0.7.2"
-regex = "1.11.1"
 
 [lints]
     [lints.rust]

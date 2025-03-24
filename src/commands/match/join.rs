@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Clone, Debug, SubCommand)]
 pub struct JoinCommand {
-    /// The match ID of the RGL official.
+    /// The ID of the RGL.gg match to join.
     match_id: RglMatchId,
 
     /// The connect info for the other team's server.
@@ -51,7 +51,7 @@ impl JoinCommand {
 
         let game = Game::try_from(game.into_active_model().insert(&tx).await?)?;
 
-        let embed = game.embed(None, guild.rgl_team_id).await?;
+        let embed = game.embed(&guild).await?;
 
         guild.refresh_schedule(ctx, &tx).await?;
 
@@ -61,7 +61,7 @@ impl JoinCommand {
             .edit_response(
                 &ctx,
                 EditInteractionResponse::new()
-                    .embeds(vec![success_embed("Official scheduled."), embed]),
+                    .embeds(vec![success_embed("Match scheduled."), embed]),
             )
             .await?;
 
