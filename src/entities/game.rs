@@ -310,14 +310,11 @@ impl<D: GameDetails> Game<D> {
 
         let (starts_at, ends_at) = self.start_end_times();
 
-        let (first_map, server_config_id) = if starts_at <= reservation.starts_at {
-            self.details
-                .maps()
-                .await?
-                .server_config(self.details.kind(), self.details.game_format().await?)
-        } else {
-            (None, None)
-        };
+        let (first_map, server_config_id) = self
+            .details
+            .maps()
+            .await?
+            .server_config(self.details.kind(), self.details.game_format().await?);
 
         let starts_at = (starts_at < reservation.starts_at).then_some(starts_at);
         let ends_at = (ends_at > reservation.ends_at).then_some(ends_at);

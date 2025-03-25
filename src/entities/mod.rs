@@ -145,10 +145,12 @@ impl BasicOption for ScheduleChannelId {
     Clone, Debug, Copy, PartialEq, Eq, Hash, EnumIter, BasicOption, DeriveActiveEnum, Deserialize,
 )]
 #[sea_orm(rs_type = "i16", db_type = "SmallInteger")]
-#[option(option_type = "string")]
+#[option(option_type = "integer")]
 #[serde(rename_all = "PascalCase")]
 pub enum GameFormat {
+    #[option(value = 6)]
     Sixes = 6,
+    #[option(value = 9)]
     Highlander = 9,
 }
 

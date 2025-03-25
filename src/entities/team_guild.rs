@@ -206,18 +206,17 @@ impl Model {
             .find_related(game::Entity)
             .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(2)))
             .filter(D::filter_expr())
-            .select_only()
             .order_by_asc(game::Column::Timestamp)
             .into_partial_model::<Game<D>>()
             .all(&tx)
             .await?
             .into_iter()
             .filter(|game| {
-                let date_matches = day_aliases(game.timestamp.date())
+                let date_matches = day_aliases(game.timestamp.date_et())
                     .iter()
                     .any(|n| n.starts_with(&day_query));
 
-                let time_matches = time_aliases(game.timestamp.time())
+                let time_matches = time_aliases(game.timestamp.time_et())
                     .iter()
                     .any(|n| n.starts_with(&time_query));
 
@@ -295,13 +294,13 @@ impl Model {
             .into_iter()
             .filter(|(reservation, datetimes)| {
                 let date_matches = datetimes.iter().any(|datetime| {
-                    day_aliases(datetime.date())
+                    day_aliases(datetime.date_et())
                         .iter()
                         .any(|n| n.starts_with(&day_query))
                 });
 
                 let time_matches = datetimes.iter().any(|datetime| {
-                    time_aliases(datetime.time())
+                    time_aliases(datetime.time_et())
                         .iter()
                         .any(|n| n.starts_with(&time_query))
                 });
