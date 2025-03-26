@@ -38,7 +38,6 @@ impl RefreshButton {
 
     pub fn create() -> CreateButton {
         CreateButton::new(Self::CUSTOM_ID)
-            .emoji('🔄')
             .label("Refresh")
             .style(ButtonStyle::Secondary)
     }
