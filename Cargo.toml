@@ -3,7 +3,7 @@ name = "scheduletf"
 
 authors = ["Vidhan Bhatt <me@vidhan.io>"]
 edition = "2024"
-license = "AGPL-3.0"
+license = "AGPL-3.0-or-later"
 publish = false
 version = "0.1.0"
 
