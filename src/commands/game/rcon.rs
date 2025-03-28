@@ -1,17 +1,11 @@
-use sea_orm::{ColumnTrait, ModelTrait, QueryFilter, QueryOrder, QuerySelect};
 use serenity::all::{CommandInteraction, Context, CreateAttachment, EditInteractionResponse};
 use serenity_commands::SubCommand;
-use time::OffsetDateTime;
 
 use crate::{
     Bot, BotResult,
-    entities::{
-        ReservationId,
-        game::{self, ScrimOrMatch},
-    },
+    entities::{ReservationId, game::ScrimOrMatch},
     error::BotError,
     serveme::GetReservationRequest,
-    utils::OffsetDateTimeEtExt,
 };
 
 #[derive(Clone, Debug, SubCommand)]
