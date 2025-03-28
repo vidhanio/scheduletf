@@ -6,10 +6,12 @@ use std::{
 };
 
 use moka::future::Cache;
+use rcon::Connection;
 use reqwest::{StatusCode, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serenity::all::AutocompleteChoice;
 use time::OffsetDateTime;
+use tokio::net::TcpStream;
 
 use crate::{
     BotResult, HTTP_CLIENT,
@@ -253,6 +255,15 @@ impl ReservationResponse {
             r#"rcon_address {}; rcon_password "{}""#,
             self.server.ip_and_port, self.rcon
         )
+    }
+
+    pub async fn rcon(&self, cmd: &str) -> BotResult<String> {
+        let mut rcon_client =
+            Connection::<TcpStream>::connect(&self.server.ip_and_port, &self.rcon).await?;
+
+        let resp = rcon_client.cmd(cmd).await?;
+
+        Ok(resp)
     }
 }
 

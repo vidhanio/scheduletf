@@ -9,6 +9,7 @@ use std::{
 
 use game::GameKind;
 use regex::Regex;
+use scraper::{Html, Selector};
 use sea_orm::{
     ColIdx, DbErr, DeriveActiveEnum, DeriveValueType, EnumIter, QueryResult, TryFromU64,
     TryGetError, TryGetable, Value,
@@ -16,12 +17,12 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serenity::all::{
-    AutocompleteChoice, ChannelId, ChannelType, CommandDataOptionValue, CreateCommandOption,
-    GuildId, MessageId, UserId,
+    AutocompleteChoice, ChannelId, ChannelType, CommandDataOptionValue, CreateAutocompleteResponse,
+    CreateCommandOption, GuildId, MessageId, UserId,
 };
 use serenity_commands::BasicOption;
 
-use crate::error::BotError;
+use crate::{BotResult, HTTP_CLIENT, error::BotError};
 
 pub mod game;
 pub mod team_guild;
@@ -333,6 +334,35 @@ impl ReservationId {
     pub fn url(self) -> String {
         format!("https://na.serveme.tf/reservations/{self}")
     }
+
+    pub async fn rcon_autocomplete_choices(
+        self,
+        query: &str,
+    ) -> BotResult<CreateAutocompleteResponse> {
+        static LI_SELECTOR: LazyLock<Selector> =
+            LazyLock::new(|| Selector::parse("li").expect("static selector should be valid"));
+
+        let html = HTTP_CLIENT
+            .get(format!(
+                "https://na.serveme.tf/rcon-autocomplete/{self}?query={query}"
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        let document = Html::parse_document(&html);
+
+        let choices = document
+            .select(&LI_SELECTOR)
+            .filter_map(|li| li.value().attr("data-suggestion"))
+            .map(|s| AutocompleteChoice::new(s, s))
+            .take(25)
+            .collect::<Vec<_>>();
+
+        Ok(CreateAutocompleteResponse::new().set_choices(choices))
+    }
 }
 
 impl Display for ReservationId {
@@ -372,7 +402,7 @@ impl MapList {
 
     pub fn server_config(&self, kind: GameKind, format: GameFormat) -> (Option<Map>, Option<u32>) {
         self.first()
-            .and_then(|m| Some((m.clone(), m.config(kind, format)?.id)))
+            .and_then(|m| Some((m.clone(), m.server_config(kind, format)?.id)))
             .unzip()
     }
 
@@ -560,7 +590,7 @@ impl Map {
             .map_or_else(|| format!("`{self}`"), |&title| title.to_owned())
     }
 
-    pub fn config(&self, kind: GameKind, format: GameFormat) -> Option<ServerConfig> {
+    pub fn server_config(&self, kind: GameKind, format: GameFormat) -> Option<ServerConfig> {
         match (kind, format) {
             (GameKind::Scrim, GameFormat::Sixes) => {
                 if self.0.starts_with("cp_") {

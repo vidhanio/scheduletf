@@ -6,16 +6,6 @@ use time::{Date, OffsetDateTime, Time, UtcOffset};
 use crate::error::BotError;
 
 macro_rules! handle_error {
-    ($result:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::error!(?error);
-
-                return;
-            }
-        }
-    };
     ($ctx:expr, $interaction:expr, $result:expr) => {
         match $result {
             Ok(value) => value,

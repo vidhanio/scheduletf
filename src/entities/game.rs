@@ -7,7 +7,8 @@ use sea_orm::{
     QueryResult, entity::prelude::*,
 };
 use serenity::all::{
-    Context, CreateEmbed, FormattedTimestamp, FormattedTimestampStyle, Mentionable,
+    AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse, CreateEmbed,
+    CreateInteractionResponse, FormattedTimestamp, FormattedTimestampStyle, Mentionable,
 };
 use serenity_commands::BasicOption;
 use time::{Duration, OffsetDateTime};
@@ -22,7 +23,7 @@ use crate::{
     rgl::{RglMatch, RglMatchId, RglSeason, RglTeamId},
     serveme::{
         CreateReservationRequest, EditReservationRequest, FindServersRequest,
-        GetReservationRequest, ReservationResponse,
+        GetReservationRequest, MapsRequest, ReservationResponse,
     },
     utils::{OffsetDateTimeEtExt, time_string},
 };
@@ -84,6 +85,49 @@ pub struct Game<D = ScrimOrMatch> {
 }
 
 impl Game {
+    pub async fn autocomplete_maps(
+        &self,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+        serveme_api_key: &ServemeApiKey,
+        query: &str,
+    ) -> BotResult {
+        let query = query.trim().to_lowercase();
+
+        let mut choices = self
+            .details
+            .maps()
+            .await?
+            .iter()
+            .map(ToString::to_string)
+            .filter(|m| m.to_lowercase().contains(&query))
+            .map(|m| AutocompleteChoice::new(m.clone(), m))
+            .take(25)
+            .collect::<Vec<_>>();
+
+        if choices.is_empty() {
+            choices = MapsRequest::send(serveme_api_key, Some(self.details.game_format().await?))
+                .await?
+                .iter()
+                .map(ToString::to_string)
+                .filter(|m| m.to_lowercase().contains(&query))
+                .map(|m| AutocompleteChoice::new(m.clone(), m))
+                .take(25)
+                .collect();
+        }
+
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Autocomplete(
+                    CreateAutocompleteResponse::new().set_choices(choices),
+                ),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn embed(&self, guild: &team_guild::Model) -> BotResult<CreateEmbed> {
         let description = self
             .server
@@ -112,7 +156,7 @@ impl Game {
 
         fields.extend([
             (
-                "Date/Time",
+                "Local Date/Time",
                 FormattedTimestamp::new(
                     self.timestamp.into(),
                     Some(FormattedTimestampStyle::LongDateTime),

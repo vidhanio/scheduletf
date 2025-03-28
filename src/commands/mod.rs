@@ -45,6 +45,7 @@ pub enum AllCommands {
     Game(GameCommand),
 
     /// Refresh the schedule.
+    #[command(builder(default_member_permissions(Permissions::MANAGE_GUILD)))]
     Refresh(RefreshCommand),
 
     #[command(name = "RGL.gg Profile", context_menu = "user")]

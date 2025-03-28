@@ -16,6 +16,9 @@ pub enum BotError {
     #[error("Command parsing error: `{0}`")]
     CommandParse(#[from] serenity_commands::Error),
 
+    #[error("RCON error: `{0}`")]
+    Rcon(#[from] rcon::Error),
+
     #[error(transparent)]
     Arc(#[from] Arc<Self>),
 

@@ -399,7 +399,7 @@ impl EditReservationIdCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_reservations(ctx, interaction, tx, &reservation_id)
+                    .autocomplete_reservations::<Scrim>(ctx, interaction, tx, &reservation_id)
                     .await
             }
         }

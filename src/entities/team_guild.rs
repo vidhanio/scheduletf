@@ -21,7 +21,7 @@ use time::{Date, Duration, OffsetDateTime, Time};
 use super::{
     GameFormat, MapList, ReservationId, ScheduleChannelId, ScheduleMessageId, ServemeApiKey,
     TeamGuildId,
-    game::{Game, GameDetails, Scrim},
+    game::{Game, GameDetails},
 };
 use crate::{
     BotResult,
@@ -204,7 +204,7 @@ impl Model {
 
         let matches = self
             .find_related(game::Entity)
-            .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(2)))
+            .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(6)))
             .filter(D::filter_expr())
             .order_by_asc(game::Column::Timestamp)
             .into_partial_model::<Game<D>>()
@@ -260,7 +260,7 @@ impl Model {
         Ok(())
     }
 
-    pub async fn autocomplete_reservations(
+    pub async fn autocomplete_reservations<D: GameDetails>(
         &self,
         ctx: &Context,
         interaction: &CommandInteraction,
@@ -275,7 +275,7 @@ impl Model {
                 game::Column::Timestamp.gte(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT)),
             )
             .filter(game::Column::ReservationId.is_not_null())
-            .filter(Scrim::filter_expr())
+            .filter(D::filter_expr())
             .select_only()
             .column(game::Column::ReservationId)
             .column(game::Column::Timestamp)
@@ -377,7 +377,7 @@ impl Model {
     async fn schedule_embed(&self, tx: &DatabaseTransaction) -> BotResult<CreateEmbed> {
         let games = self
             .find_related(game::Entity)
-            .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(2)))
+            .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(6)))
             .order_by_asc(game::Column::Timestamp)
             .limit(25)
             .into_partial_model::<Game>()
