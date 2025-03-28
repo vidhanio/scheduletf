@@ -212,7 +212,7 @@ impl FromStr for ConnectInfo {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         static IP_AND_PORT: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r#"^\s*connect\s+(?:(.*?)|"(.*)")\s*;\s*password\s+(?:(.*?)|"(.*)")\s*"#)
+            Regex::new(r#"^\s*connect\s+(?:"(.*)"|(.*?))\s*;\s*password\s+(?:"(.*)"|(.*?))\s*"#)
                 .unwrap()
         });
 
