@@ -243,7 +243,7 @@ impl Model {
                                     format!(
                                         "{}: {}{vs}",
                                         m.timestamp.string_et_relative(),
-                                        m.details.kind(),
+                                        m.details.name(),
                                     ),
                                     m.timestamp.unix_timestamp(),
                                 ))

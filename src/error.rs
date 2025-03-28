@@ -34,6 +34,9 @@ pub enum BotError {
     #[error("No na.serveme.tf servers found.")]
     NoServemeServers,
 
+    #[error("invalid IP/port from na.servemetf.")]
+    InvalidServemeIpPort,
+
     #[error("Invalid connect info.")]
     InvalidConnectInfo,
 

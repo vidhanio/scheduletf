@@ -1,7 +1,4 @@
-use std::{
-    fmt::{self, Display, Formatter},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use migration::SimpleExpr;
 use rand::distr::{Alphanumeric, SampleString};
@@ -92,13 +89,28 @@ impl Game {
             .server
             .connect_info_block(guild.serveme_api_key.as_ref())
             .await?;
-        let kind = self.details.kind();
         let title = format!(
-            "{} **{kind}:** {}",
+            "{} **{}:** {}",
             self.details.emoji(),
+            self.details.name(),
             self.timestamp.string_et()
         );
-        let mut fields = vec![
+
+        let mut fields = vec![];
+
+        if self.server.is_hosted() {
+            let reservation = self.get_reservation(guild.serveme_api_key()?).await?;
+            fields.extend([
+                (
+                    "RCON",
+                    format!("```\n{}\n```", reservation.rcon_info()),
+                    false,
+                ),
+                ("STV", reservation.stv_connect_info().code_block(), false),
+            ]);
+        }
+
+        fields.extend([
             (
                 "Date/Time",
                 FormattedTimestamp::new(
@@ -117,7 +129,7 @@ impl Game {
                     .unwrap_or_else(|| "Not decided".into()),
                 false,
             ),
-        ];
+        ]);
 
         match &self.details {
             ScrimOrMatch::Scrim(scrim) => {
@@ -222,14 +234,9 @@ impl Game {
 
 impl<D: GameDetails> Game<D> {
     fn start_end_times(&self) -> (OffsetDateTime, OffsetDateTime) {
-        let duration = match self.details.kind() {
-            GameKind::Scrim => Duration::HOUR,
-            GameKind::Match => Duration::hours(2),
-        };
-
         (
             self.timestamp - Duration::minutes(15),
-            self.timestamp + duration + Duration::minutes(15),
+            self.timestamp + self.details.kind().duration() + Duration::minutes(15),
         )
     }
 
@@ -310,11 +317,23 @@ impl<D: GameDetails> Game<D> {
 
         let (starts_at, ends_at) = self.start_end_times();
 
-        let (first_map, server_config_id) = self
-            .details
-            .maps()
-            .await?
-            .server_config(self.details.kind(), self.details.game_format().await?);
+        let (first_map, server_config_id) = if starts_at <= reservation.starts_at {
+            let (first_map, server_config_id) = self
+                .details
+                .maps()
+                .await?
+                .server_config(self.details.kind(), self.details.game_format().await?);
+
+            if (&first_map, &server_config_id)
+                == (&reservation.first_map, &reservation.server_config_id)
+            {
+                (None, None)
+            } else {
+                (first_map, server_config_id)
+            }
+        } else {
+            (None, None)
+        };
 
         let starts_at = (starts_at < reservation.starts_at).then_some(starts_at);
         let ends_at = (ends_at > reservation.ends_at).then_some(ends_at);
@@ -461,13 +480,15 @@ pub trait GameDetails: Into<ScrimOrMatch> + Sync + Sized {
 
     fn kind(&self) -> GameKind;
 
+    fn name(&self) -> &'static str;
+
+    fn emoji(&self) -> char;
+
     async fn opponent_string(
         &self,
         ctx: &Context,
         team_id: Option<RglTeamId>,
     ) -> BotResult<Option<String>>;
-
-    fn emoji(&self) -> char;
 
     async fn maps(&self) -> BotResult<MapList>;
 
@@ -517,18 +538,21 @@ impl GameDetails for ScrimOrMatch {
         }
     }
 
+    fn kind(&self) -> GameKind {
+        match self {
+            Self::Scrim(scrim) => scrim.kind(),
+            Self::Match(match_) => match_.kind(),
+        }
+    }
+
     fn filter_expr() -> SimpleExpr {
         true.into()
     }
 
-    async fn opponent_string(
-        &self,
-        ctx: &Context,
-        team_id: Option<RglTeamId>,
-    ) -> BotResult<Option<String>> {
+    fn name(&self) -> &'static str {
         match self {
-            Self::Scrim(scrim) => scrim.opponent_string(ctx, team_id).await,
-            Self::Match(match_) => match_.opponent_string(ctx, team_id).await,
+            Self::Scrim(scrim) => scrim.name(),
+            Self::Match(match_) => match_.name(),
         }
     }
 
@@ -539,10 +563,14 @@ impl GameDetails for ScrimOrMatch {
         }
     }
 
-    fn kind(&self) -> GameKind {
+    async fn opponent_string(
+        &self,
+        ctx: &Context,
+        team_id: Option<RglTeamId>,
+    ) -> BotResult<Option<String>> {
         match self {
-            Self::Scrim(_) => GameKind::Scrim,
-            Self::Match(_) => GameKind::Match,
+            Self::Scrim(scrim) => scrim.opponent_string(ctx, team_id).await,
+            Self::Match(match_) => match_.opponent_string(ctx, team_id).await,
         }
     }
 
@@ -607,12 +635,26 @@ impl GameDetails for Scrim {
         )
     }
 
+    fn kind(&self) -> GameKind {
+        GameKind::Scrim
+    }
+
     fn filter_expr() -> SimpleExpr {
         Expr::col(Column::RglMatchId).is_null()
     }
 
-    fn kind(&self) -> GameKind {
-        GameKind::Scrim
+    fn name(&self) -> &'static str {
+        match self.opponent_user_id {
+            Some(_) => "Scrim",
+            None => "Looking for Scrim",
+        }
+    }
+
+    fn emoji(&self) -> char {
+        match self.opponent_user_id {
+            Some(_) => '🎯',
+            None => '🔍',
+        }
     }
 
     async fn opponent_string(
@@ -625,13 +667,6 @@ impl GameDetails for Scrim {
             Ok(Some(user.global_name.unwrap_or(user.name)))
         } else {
             Ok(None)
-        }
-    }
-
-    fn emoji(&self) -> char {
-        match self.opponent_user_id {
-            Some(_) => '🎯',
-            None => '🔍',
         }
     }
 
@@ -679,12 +714,16 @@ impl GameDetails for Match {
         (None, None, None, Some(self.rgl_match_id))
     }
 
+    fn kind(&self) -> GameKind {
+        GameKind::Match
+    }
+
     fn filter_expr() -> SimpleExpr {
         Expr::col(Column::RglMatchId).is_not_null()
     }
 
-    fn kind(&self) -> GameKind {
-        GameKind::Match
+    fn name(&self) -> &'static str {
+        "Match"
     }
 
     async fn opponent_string(
@@ -718,26 +757,24 @@ impl GameDetails for Match {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GameKind {
     Scrim,
     Match,
 }
 
 impl GameKind {
-    const fn prefix(self) -> &'static str {
+    pub const fn prefix(self) -> &'static str {
         match self {
             Self::Scrim => "scrim",
             Self::Match => "match",
         }
     }
-}
 
-impl Display for GameKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    pub const fn duration(self) -> Duration {
         match self {
-            Self::Scrim => write!(f, "Scrim"),
-            Self::Match => write!(f, "Match"),
+            Self::Scrim => Duration::HOUR,
+            Self::Match => Duration::hours(2),
         }
     }
 }

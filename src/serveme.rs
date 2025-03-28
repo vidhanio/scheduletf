@@ -64,6 +64,7 @@ pub struct FindServersResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Server {
     pub id: u32,
+    pub ip: String,
     pub ip_and_port: String,
 }
 
@@ -224,6 +225,11 @@ pub struct ReservationResponse {
     #[serde(with = "time::serde::iso8601")]
     pub ends_at: OffsetDateTime,
     pub password: String,
+    pub rcon: String,
+    pub first_map: Option<Map>,
+    pub tv_password: String,
+    pub tv_port: u16,
+    pub server_config_id: Option<u32>,
     pub server: Server,
 }
 
@@ -233,6 +239,20 @@ impl ReservationResponse {
             ip_and_port: self.server.ip_and_port.clone(),
             password: self.password.clone(),
         }
+    }
+
+    pub fn stv_connect_info(&self) -> ConnectInfo {
+        ConnectInfo {
+            ip_and_port: format!("{}:{}", self.server.ip, self.tv_port),
+            password: self.tv_password.clone(),
+        }
+    }
+
+    pub fn rcon_info(&self) -> String {
+        format!(
+            r#"rcon_address {}; rcon_password "{}""#,
+            self.server.ip_and_port, self.rcon
+        )
     }
 }
 
