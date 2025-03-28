@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     iter,
     sync::{Arc, LazyLock},
     vec,
@@ -10,12 +10,14 @@ use rcon::Connection;
 use reqwest::{StatusCode, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serenity::all::AutocompleteChoice;
+use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::net::TcpStream;
 
 use crate::{
     BotResult, HTTP_CLIENT,
     entities::{ConnectInfo, GameFormat, Map, MapList, ReservationId, ServemeApiKey},
+    error::BotError,
 };
 
 static CACHE: LazyLock<Cache<ReservationId, Arc<ReservationResponse>>> = LazyLock::new(|| {
@@ -24,14 +26,63 @@ static CACHE: LazyLock<Cache<ReservationId, Arc<ReservationResponse>>> = LazyLoc
         .build()
 });
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ReservationWrapper<T> {
-    reservation: T,
+    reservation: ReservationErrorsWrapper<T>,
 }
 
-impl<T> From<T> for ReservationWrapper<T> {
+impl<T> ReservationWrapper<T> {
+    pub fn into_result(self) -> Result<T, BotError> {
+        if let Some(errors) = self.reservation.errors {
+            Err(BotError::Serveme(errors))
+        } else {
+            Ok(self.reservation.reservation)
+        }
+    }
+}
+
+impl<T> From<T> for ReservationWrapper<T>
+where
+    T: Serialize,
+{
     fn from(reservation: T) -> Self {
-        Self { reservation }
+        Self {
+            reservation: ReservationErrorsWrapper {
+                reservation,
+                errors: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct ReservationErrorsWrapper<T> {
+    #[serde(flatten)]
+    reservation: T,
+    #[serde(skip_serializing)]
+    errors: Option<ServemeError>,
+}
+
+#[derive(Debug, Error)]
+#[error("na.serveme.tf error: {}", .0.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join(", "))]
+pub struct ServemeError(pub HashMap<String, String>);
+
+impl<'de> Deserialize<'de> for ServemeError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ErrorWrapper {
+            error: String,
+        }
+
+        let error = HashMap::<String, ErrorWrapper>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(k, v)| (k, v.error))
+            .collect();
+
+        Ok(Self(error))
     }
 }
 
@@ -90,10 +141,33 @@ impl GetReservationRequest {
                     .error_for_status()?
                     .json::<ReservationWrapper<ReservationResponse>>()
                     .await?
-                    .reservation
+                    .into_result()?
                     .into())
             })
             .await?)
+    }
+
+    pub async fn send_many(api_key: &ServemeApiKey) -> BotResult<Vec<Arc<ReservationResponse>>> {
+        #[derive(Deserialize)]
+        struct ReservationsResponse {
+            reservations: Vec<Arc<ReservationResponse>>,
+        }
+
+        let reservations = HTTP_CLIENT
+            .get("https://na.serveme.tf/api/reservations")
+            .header(AUTHORIZATION, api_key.auth_header())
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ReservationsResponse>()
+            .await?
+            .reservations;
+
+        for reservation in &reservations {
+            CACHE.insert(reservation.id, Arc::clone(reservation)).await;
+        }
+
+        Ok(reservations)
     }
 }
 
@@ -128,7 +202,7 @@ impl CreateReservationRequest {
                 .error_for_status()?
                 .json::<ReservationWrapper<ReservationResponse>>()
                 .await?
-                .reservation,
+                .into_result()?,
         );
 
         CACHE.insert(reservation.id, Arc::clone(&reservation)).await;
@@ -176,7 +250,7 @@ impl EditReservationRequest {
                 .error_for_status()?
                 .json::<ReservationWrapper<ReservationResponse>>()
                 .await?
-                .reservation,
+                .into_result()?,
         );
 
         CACHE.insert(reservation.id, Arc::clone(&reservation)).await;
@@ -212,7 +286,7 @@ impl DeleteReservationRequest {
             let reservation = resp
                 .json::<ReservationWrapper<ReservationResponse>>()
                 .await?
-                .reservation;
+                .into_result()?;
 
             Ok(Some(reservation))
         }
@@ -222,6 +296,7 @@ impl DeleteReservationRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReservationResponse {
     pub id: ReservationId,
+    pub status: ReservationStatus,
     #[serde(with = "time::serde::iso8601")]
     pub starts_at: OffsetDateTime,
     #[serde(with = "time::serde::iso8601")]
@@ -264,6 +339,43 @@ impl ReservationResponse {
         let resp = rcon_client.cmd(cmd).await?;
 
         Ok(resp)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub enum ReservationStatus {
+    #[serde(rename = "Waiting to start")]
+    WaitingToStart,
+
+    #[serde(rename = "Starting")]
+    Starting,
+
+    #[serde(rename = "Server updating, please be patient")]
+    ServerUpdating,
+
+    #[serde(rename = "Ready")]
+    Ready,
+
+    #[serde(rename = "SDR Ready")]
+    SdrReady,
+
+    #[serde(rename = "Ending")]
+    Ending,
+
+    #[serde(rename = "Ended")]
+    Ended,
+
+    #[serde(rename = "Unknown")]
+    Unknown,
+}
+
+impl ReservationStatus {
+    pub const fn is_ready(self) -> bool {
+        matches!(self, Self::Ready | Self::SdrReady)
+    }
+
+    pub const fn is_ended(self) -> bool {
+        matches!(self, Self::Ending | Self::Ended)
     }
 }
 

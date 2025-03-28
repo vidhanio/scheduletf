@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::serveme;
+
 #[derive(Debug, Error)]
 pub enum BotError {
     #[error("HTTP error: `{0}`")]
@@ -18,6 +20,9 @@ pub enum BotError {
 
     #[error("RCON error: `{0}`")]
     Rcon(#[from] rcon::Error),
+
+    #[error("Serveme error: `{0}`")]
+    Serveme(#[from] serveme::ServemeError),
 
     #[error(transparent)]
     Arc(#[from] Arc<Self>),
@@ -54,6 +59,9 @@ pub enum BotError {
 
     #[error("Game not found.")]
     GameNotFound,
+
+    #[error("No active games found.")]
+    NoActiveGames,
 
     #[error("Game not hosted.")]
     GameNotHosted,

@@ -1,4 +1,3 @@
-use sea_orm::{ColumnTrait, ModelTrait, QueryFilter, QueryOrder};
 use serenity::all::{CommandInteraction, Context, EditInteractionResponse};
 use serenity_commands::SubCommand;
 use time::OffsetDateTime;
@@ -7,11 +6,11 @@ use crate::{
     Bot, BotResult,
     entities::{
         Map,
-        game::{self, GameDetails, ScrimOrMatch},
+        game::{GameDetails, ScrimOrMatch},
     },
     error::BotError,
     serveme::EditReservationRequest,
-    utils::{OffsetDateTimeEtExt, success_embed},
+    utils::success_embed,
 };
 
 #[derive(Clone, Debug, SubCommand)]
@@ -41,13 +40,11 @@ impl ChangelevelCommand {
             guild.get_game::<ScrimOrMatch>(&tx, game).await?
         } else {
             guild
-                .find_related(game::Entity)
-                .filter(game::Column::Timestamp.lte(OffsetDateTime::now_et()))
-                .order_by_desc(game::Column::Timestamp)
-                .into_partial_model()
+                .select_closest_active_games::<ScrimOrMatch>()
+                .await?
                 .one(&tx)
                 .await?
-                .ok_or(BotError::GameNotFound)?
+                .ok_or(BotError::NoActiveGames)?
         };
 
         let reservation_id = game.server.reservation_id()?;
@@ -91,13 +88,11 @@ impl ChangelevelCommandAutocomplete {
                     guild.get_game::<ScrimOrMatch>(&tx, game).await?
                 } else {
                     guild
-                        .find_related(game::Entity)
-                        .filter(game::Column::Timestamp.lte(OffsetDateTime::now_et()))
-                        .order_by_desc(game::Column::Timestamp)
-                        .into_partial_model()
+                        .select_closest_active_games::<ScrimOrMatch>()
+                        .await?
                         .one(&tx)
                         .await?
-                        .ok_or(BotError::GameNotFound)?
+                        .ok_or(BotError::NoActiveGames)?
                 };
 
                 game.autocomplete_maps(ctx, interaction, guild.serveme_api_key()?, &map)
@@ -107,7 +102,13 @@ impl ChangelevelCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_games::<ScrimOrMatch>(ctx, interaction, tx, &game)
+                    .autocomplete_games::<ScrimOrMatch>(
+                        ctx,
+                        interaction,
+                        tx,
+                        Some(guild.select_closest_active_games::<ScrimOrMatch>().await?),
+                        &game,
+                    )
                     .await
             }
         }

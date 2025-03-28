@@ -302,6 +302,7 @@ macro_rules! impl_autocomplete_scrim {
                                 ctx,
                                 interaction,
                                 tx,
+                                None,
                                 &scrim,
                             )
                             .await
@@ -326,7 +327,7 @@ impl EditDateTimeCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_games::<Scrim>(ctx, interaction, tx, &scrim)
+                    .autocomplete_games::<Scrim>(ctx, interaction, tx, None, &scrim)
                     .await
             }
             Self::DateTime { date_time, .. } => {
@@ -352,7 +353,7 @@ impl EditMapsCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_games::<Scrim>(ctx, interaction, tx, &scrim)
+                    .autocomplete_games::<Scrim>(ctx, interaction, tx, None, &scrim)
                     .await
             }
             Self::Maps { maps, scrim, .. } => {
@@ -392,14 +393,20 @@ impl EditReservationIdCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_games::<Scrim>(ctx, interaction, tx, &scrim)
+                    .autocomplete_games::<Scrim>(ctx, interaction, tx, None, &scrim)
                     .await
             }
             Self::ReservationId { reservation_id, .. } => {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_reservations::<Scrim>(ctx, interaction, tx, &reservation_id)
+                    .autocomplete_reservations::<Scrim>(
+                        ctx,
+                        interaction,
+                        tx,
+                        |r| !r.status.is_ended(),
+                        &reservation_id,
+                    )
                     .await
             }
         }

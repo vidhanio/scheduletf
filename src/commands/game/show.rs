@@ -47,7 +47,7 @@ impl ShowCommandAutocomplete {
         let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
         guild
-            .autocomplete_games::<ScrimOrMatch>(ctx, interaction, tx, &game)
+            .autocomplete_games::<ScrimOrMatch>(ctx, interaction, tx, None, &game)
             .await
     }
 }

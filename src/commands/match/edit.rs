@@ -192,6 +192,7 @@ macro_rules! impl_autocomplete_match {
                                 ctx,
                                 interaction,
                                 tx,
+                                None,
                                 &match_,
                             )
                             .await

@@ -40,15 +40,13 @@ impl RconCommand {
             reservation_id
         } else {
             guild
-                .find_related(game::Entity)
-                .filter(game::Column::Timestamp.lte(OffsetDateTime::now_et()))
-                .order_by_desc(game::Column::Timestamp)
-                .select_only()
-                .column(game::Column::ReservationId)
-                .into_tuple()
+                .select_closest_active_games::<ScrimOrMatch>()
+                .await?
                 .one(&tx)
                 .await?
-                .ok_or(BotError::GameNotFound)?
+                .ok_or(BotError::NoActiveGames)?
+                .server
+                .reservation_id()?
         };
 
         let reservation =
@@ -81,7 +79,13 @@ impl RconCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_reservations::<ScrimOrMatch>(ctx, interaction, tx, &reservation)
+                    .autocomplete_reservations::<ScrimOrMatch>(
+                        ctx,
+                        interaction,
+                        tx,
+                        |r| r.status.is_ready(),
+                        &reservation,
+                    )
                     .await
             }
         }

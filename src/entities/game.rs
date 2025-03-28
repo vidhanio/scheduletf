@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use migration::SimpleExpr;
 use rand::distr::{Alphanumeric, SampleString};
 use sea_orm::{
     ActiveValue::Unchanged, DbErr, FromQueryResult, IntoActiveModel, PartialModelTrait,
-    QueryResult, entity::prelude::*,
+    QueryResult, entity::prelude::*, sea_query::SimpleExpr,
 };
 use serenity::all::{
     AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse, CreateEmbed,

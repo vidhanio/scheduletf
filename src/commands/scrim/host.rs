@@ -124,7 +124,13 @@ impl HostCommandAutocomplete {
                 let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
                 guild
-                    .autocomplete_reservations::<Scrim>(ctx, interaction, tx, &reservation_id)
+                    .autocomplete_reservations::<Scrim>(
+                        ctx,
+                        interaction,
+                        tx,
+                        |r| !r.status.is_ended(),
+                        &reservation_id,
+                    )
                     .await
             }
         }

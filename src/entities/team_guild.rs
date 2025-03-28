@@ -5,8 +5,10 @@ use std::{
 };
 
 use sea_orm::{
-    ActiveValue::Set, DatabaseTransaction, IntoActiveModel, QueryOrder, QuerySelect,
+    ActiveValue::Set,
+    DatabaseTransaction, IntoActiveModel, QueryOrder, QuerySelect, SelectModel, Selector,
     entity::prelude::*,
+    sea_query::{Func, SimpleExpr},
 };
 use serenity::{
     all::{
@@ -21,7 +23,7 @@ use time::{Date, Duration, OffsetDateTime, Time};
 use super::{
     GameFormat, MapList, ReservationId, ScheduleChannelId, ScheduleMessageId, ServemeApiKey,
     TeamGuildId,
-    game::{Game, GameDetails},
+    game::{Game, GameDetails, ScrimOrMatch},
 };
 use crate::{
     BotResult,
@@ -33,7 +35,7 @@ use crate::{
     entities::game,
     error::BotError,
     rgl::RglTeamId,
-    serveme::MapsRequest,
+    serveme::{GetReservationRequest, MapsRequest, ReservationResponse},
     utils::{OffsetDateTimeEtExt, date_string},
 };
 
@@ -61,6 +63,42 @@ impl Model {
             .one(tx)
             .await?
             .ok_or(BotError::GameNotFound)
+    }
+
+    fn select_games<D: GameDetails>(&self, limit: Option<u64>) -> Selector<SelectModel<Game<D>>> {
+        self.find_related(game::Entity)
+            .filter(game::Column::Timestamp.gt(OffsetDateTime::now_et() - Duration::hours(6)))
+            .filter(D::filter_expr())
+            .order_by_asc(game::Column::Timestamp)
+            .limit(limit)
+            .into_partial_model()
+    }
+
+    pub async fn select_closest_active_games<D: GameDetails>(
+        &self,
+    ) -> BotResult<Selector<SelectModel<Game<D>>>> {
+        let reservations = GetReservationRequest::send_many(self.serveme_api_key()?).await?;
+
+        let ready_reservation_ids = reservations
+            .iter()
+            .filter(|r| r.status.is_ready())
+            .map(|r| r.id);
+
+        Ok(self
+            .find_related(game::Entity)
+            .filter(D::filter_expr())
+            .filter(game::Column::ReservationId.is_in(ready_reservation_ids))
+            .order_by_desc(game::Column::Timestamp.lt(OffsetDateTime::now_et()))
+            .order_by_asc(SimpleExpr::from(Func::greatest([
+                game::Column::Timestamp
+                    .into_expr()
+                    .sub(Expr::current_timestamp()),
+                game::Column::Timestamp
+                    .into_expr()
+                    .sub(Expr::current_timestamp())
+                    .mul(-1),
+            ])))
+            .into_partial_model())
     }
 
     pub async fn ensure_time_open(
@@ -110,7 +148,7 @@ impl Model {
         let taken_datetimes = self
             .find_related(game::Entity)
             .filter(
-                game::Column::Timestamp.gte(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT)),
+                game::Column::Timestamp.gt(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT)),
             )
             .select_only()
             .column(game::Column::Timestamp)
@@ -198,16 +236,13 @@ impl Model {
         ctx: &Context,
         interaction: &CommandInteraction,
         tx: DatabaseTransaction,
+        selector: Option<Selector<SelectModel<Game<D>>>>,
         query: &str,
     ) -> BotResult {
         let (_, day_query, time_query) = split_datetime_query(query);
 
-        let matches = self
-            .find_related(game::Entity)
-            .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(6)))
-            .filter(D::filter_expr())
-            .order_by_asc(game::Column::Timestamp)
-            .into_partial_model::<Game<D>>()
+        let matches = selector
+            .unwrap_or_else(|| self.select_games::<D>(None))
             .all(&tx)
             .await?
             .into_iter()
@@ -265,28 +300,32 @@ impl Model {
         ctx: &Context,
         interaction: &CommandInteraction,
         tx: DatabaseTransaction,
+        filter: impl Fn(&ReservationResponse) -> bool,
         query: &str,
     ) -> BotResult {
         let (query, day_query, time_query) = split_datetime_query(query);
 
+        let reservations = GetReservationRequest::send_many(self.serveme_api_key()?)
+            .await?
+            .into_iter()
+            .filter(|r| filter(r))
+            .map(|r| r.id);
+
         let data = self
             .find_related(game::Entity)
-            .filter(
-                game::Column::Timestamp.gte(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT)),
-            )
-            .filter(game::Column::ReservationId.is_not_null())
             .filter(D::filter_expr())
-            .select_only()
-            .column(game::Column::ReservationId)
-            .column(game::Column::Timestamp)
+            .filter(game::Column::ReservationId.is_in(reservations))
             .order_by_asc(game::Column::Timestamp)
-            .into_tuple::<(ReservationId, OffsetDateTime)>()
+            .select_only()
+            .column(game::Column::Timestamp)
+            .column(game::Column::ReservationId)
+            .into_tuple::<(OffsetDateTime, ReservationId)>()
             .all(&tx)
             .await?;
 
         let mut map = BTreeMap::<ReservationId, Vec<OffsetDateTime>>::new();
 
-        for (reservation, datetime) in data {
+        for (datetime, reservation) in data {
             map.entry(reservation).or_default().push(datetime);
         }
 
@@ -375,14 +414,7 @@ impl Model {
     }
 
     async fn schedule_embed(&self, tx: &DatabaseTransaction) -> BotResult<CreateEmbed> {
-        let games = self
-            .find_related(game::Entity)
-            .filter(game::Column::Timestamp.gte(OffsetDateTime::now_et() - Duration::hours(6)))
-            .order_by_asc(game::Column::Timestamp)
-            .limit(25)
-            .into_partial_model::<Game>()
-            .all(tx)
-            .await?;
+        let games = self.select_games::<ScrimOrMatch>(Some(25)).all(tx).await?;
 
         let mut map = BTreeMap::<Date, Vec<Game>>::new();
 
