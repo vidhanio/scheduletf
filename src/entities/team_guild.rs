@@ -305,11 +305,9 @@ impl Model {
     ) -> BotResult {
         let (query, day_query, time_query) = split_datetime_query(query);
 
-        let reservations = GetReservationRequest::send_many(self.serveme_api_key()?)
-            .await?
-            .into_iter()
-            .filter(|r| filter(r))
-            .map(|r| r.id);
+        let reservations = GetReservationRequest::send_many(self.serveme_api_key()?).await?;
+
+        let reservations = reservations.iter().filter(|r| filter(r)).map(|r| r.id);
 
         let data = self
             .find_related(game::Entity)

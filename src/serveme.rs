@@ -22,7 +22,8 @@ use crate::{
 
 static CACHE: LazyLock<Cache<ReservationId, Arc<ReservationResponse>>> = LazyLock::new(|| {
     Cache::builder()
-        .time_to_live(std::time::Duration::from_secs(10))
+        .time_to_idle(std::time::Duration::from_secs(10))
+        .time_to_live(std::time::Duration::from_secs(60))
         .build()
 });
 
@@ -147,25 +148,39 @@ impl GetReservationRequest {
             .await?)
     }
 
-    pub async fn send_many(api_key: &ServemeApiKey) -> BotResult<Vec<Arc<ReservationResponse>>> {
+    pub async fn send_many(api_key: &ServemeApiKey) -> BotResult<Arc<[Arc<ReservationResponse>]>> {
+        static RESERVATIONS_CACHE: LazyLock<Cache<(), Arc<[Arc<ReservationResponse>]>>> =
+            LazyLock::new(|| {
+                Cache::builder()
+                    .time_to_idle(std::time::Duration::from_secs(10))
+                    .time_to_live(std::time::Duration::from_secs(60))
+                    .build()
+            });
+
         #[derive(Deserialize)]
         struct ReservationsResponse {
             reservations: Vec<Arc<ReservationResponse>>,
         }
 
-        let reservations = HTTP_CLIENT
-            .get("https://na.serveme.tf/api/reservations")
-            .header(AUTHORIZATION, api_key.auth_header())
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ReservationsResponse>()
-            .await?
-            .reservations;
+        let reservations = RESERVATIONS_CACHE
+            .try_get_with((), async {
+                let reservations = HTTP_CLIENT
+                    .get("https://na.serveme.tf/api/reservations?limit=500")
+                    .header(AUTHORIZATION, api_key.auth_header())
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<ReservationsResponse>()
+                    .await?
+                    .reservations;
 
-        for reservation in &reservations {
-            CACHE.insert(reservation.id, Arc::clone(reservation)).await;
-        }
+                for reservation in &reservations {
+                    CACHE.insert(reservation.id, Arc::clone(reservation)).await;
+                }
+
+                Ok(reservations.into())
+            })
+            .await?;
 
         Ok(reservations)
     }
