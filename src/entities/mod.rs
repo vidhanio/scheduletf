@@ -156,6 +156,14 @@ pub enum GameFormat {
 }
 
 impl GameFormat {
+    #[allow(clippy::unreadable_literal)]
+    pub const fn lfs_channel(self) -> ChannelId {
+        match self {
+            Self::Sixes => ChannelId::new(659964729887817739),
+            Self::Highlander => ChannelId::new(658367440698212376),
+        }
+    }
+
     pub const fn rgl_id(self) -> u8 {
         match self {
             Self::Sixes => 40,

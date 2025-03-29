@@ -223,3 +223,40 @@ pub fn time_string(time: Time) -> String {
 
     format!("{hour}:{minute:02} {ampm}")
 }
+
+pub fn lfs_date_string(date: Date) -> String {
+    let weekday = date.weekday().to_string()[..3].to_lowercase();
+    let month = date.month().to_string()[..3].to_lowercase();
+    let day = date.day();
+
+    format!("{weekday} {month} {day}")
+}
+
+pub fn lfs_date_string_single(date: Date) -> String {
+    if date == OffsetDateTime::now_et().date() {
+        String::new()
+    } else {
+        let weekday = date.weekday().to_string()[..3].to_lowercase();
+        format!("{weekday} ")
+    }
+}
+
+pub fn lfs_time_string(time: Time) -> String {
+    let hour_24 = time.hour();
+    let hour = if hour_24 == 0 {
+        12
+    } else if hour_24 > 12 {
+        hour_24 - 12
+    } else {
+        hour_24
+    };
+    let minute = time.minute();
+    let minute = if minute == 0 {
+        String::new()
+    } else {
+        format!("{minute:02}")
+    };
+    let ampm = if hour_24 >= 12 { "" } else { "am" };
+
+    format!("{hour}{minute}{ampm}")
+}

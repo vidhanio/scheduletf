@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    convert::identity,
     iter, mem,
     string::ToString,
 };
@@ -49,6 +50,7 @@ pub struct Model {
     pub schedule_channel_id: Option<ScheduleChannelId>,
     pub schedule_message_id: Option<ScheduleMessageId>,
     pub serveme_api_key: Option<ServemeApiKey>,
+    pub scrim_division: Option<String>,
 }
 
 impl Model {
@@ -65,13 +67,19 @@ impl Model {
             .ok_or(BotError::GameNotFound)
     }
 
-    fn select_games<D: GameDetails>(&self, limit: Option<u64>) -> Selector<SelectModel<Game<D>>> {
-        self.find_related(game::Entity)
-            .filter(game::Column::Timestamp.gt(OffsetDateTime::now_et() - Duration::hours(6)))
+    pub fn select_games<D: GameDetails>(
+        &self,
+        f: impl FnOnce(Select<game::Entity>) -> Select<game::Entity>,
+    ) -> Selector<SelectModel<Game<D>>> {
+        f(self
+            .find_related(game::Entity)
+            .filter(
+                game::Column::Timestamp.gt((OffsetDateTime::now_et() - Duration::hours(6))
+                    .min(OffsetDateTime::now_et().replace_time(Time::MIDNIGHT))),
+            )
             .filter(D::filter_expr())
-            .order_by_asc(game::Column::Timestamp)
-            .limit(limit)
-            .into_partial_model()
+            .order_by_asc(game::Column::Timestamp))
+        .into_partial_model()
     }
 
     pub async fn select_closest_active_games<D: GameDetails>(
@@ -242,7 +250,7 @@ impl Model {
         let (_, day_query, time_query) = split_datetime_query(query);
 
         let matches = selector
-            .unwrap_or_else(|| self.select_games::<D>(None))
+            .unwrap_or_else(|| self.select_games::<D>(identity))
             .all(&tx)
             .await?
             .into_iter()
@@ -412,7 +420,10 @@ impl Model {
     }
 
     async fn schedule_embed(&self, tx: &DatabaseTransaction) -> BotResult<CreateEmbed> {
-        let games = self.select_games::<ScrimOrMatch>(Some(25)).all(tx).await?;
+        let games = self
+            .select_games::<ScrimOrMatch>(|s| s.limit(25))
+            .all(tx)
+            .await?;
 
         let mut map = BTreeMap::<Date, Vec<Game>>::new();
 
@@ -524,6 +535,13 @@ impl Model {
                 self.game_format
                     .as_ref()
                     .map_or_else(|| "Not set".to_owned(), ToString::to_string),
+                true,
+            )
+            .field(
+                "Scrim Division",
+                self.scrim_division
+                    .as_ref()
+                    .map_or_else(|| "Not set".to_owned(), |d| format!("`{d}`")),
                 true,
             )
             .field(

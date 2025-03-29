@@ -66,6 +66,9 @@ pub enum BotError {
     #[error("Game not hosted.")]
     GameNotHosted,
 
+    #[error("No scrims without opponent found.")]
+    NoScrimsWithoutOpponent,
+
     #[error("RGL.gg profile not found.")]
     RglProfileNotFound,
 
@@ -85,6 +88,11 @@ pub enum BotError {
 
     #[error("No RGL team set. Set one with `/config set rgl-team`.")]
     NoRglTeam,
+
+    #[error(
+        "No scrim division set. Either set one with `/config set scrim-division` or provide one in the command."
+    )]
+    NoDivision,
 }
 
 impl From<serenity::Error> for BotError {

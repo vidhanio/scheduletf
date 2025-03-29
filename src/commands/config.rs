@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, IntoActiveModel};
+use sea_orm::{ActiveModelTrait, IntoActiveModel};
 use serenity::all::{CommandInteraction, Context, CreateInteractionResponse};
 use serenity_commands::{Command, SubCommandGroup};
 
@@ -16,9 +16,6 @@ pub enum ConfigCommand {
 
     /// Set a configuration option.
     Set(ConfigSetCommand),
-
-    /// Unset a configuration option.
-    Unset(ConfigUnsetCommand),
 }
 
 macro_rules! config_commands {
@@ -33,17 +30,9 @@ macro_rules! config_commands {
             $(
                 #[doc = concat!("Set the ", $doc, ".")]
                 $name {
-                    #[doc = concat!("The ", stringify!($doc), ".")]
-                    $field: $field_ty,
+                    #[doc = concat!("The ", stringify!($doc), ". If left empty, this unsets the option.")]
+                    $field: Option<$field_ty>,
                 },
-            )*
-        }
-
-        #[derive(Debug, SubCommandGroup)]
-        pub enum ConfigUnsetCommand {
-            $(
-                #[doc = concat!("Unset the ", $doc, ".")]
-                $name,
             )*
         }
     };
@@ -61,6 +50,9 @@ config_commands! {
 
     "RGL team ID"
     RglTeam { id: RglTeamId },
+
+    "division to use in LFS messages"
+    ScrimDivision { division: String },
 }
 
 impl ConfigCommand {
@@ -72,7 +64,7 @@ impl ConfigCommand {
     ) -> BotResult {
         let (guild, tx) = bot.get_guild_tx(interaction.guild_id).await?;
 
-        let active_guild = match self {
+        match self {
             Self::Show => {
                 interaction
                     .create_response(
@@ -82,73 +74,53 @@ impl ConfigCommand {
                         ),
                     )
                     .await?;
-
-                return Ok(());
             }
             Self::Set(cmd) => {
                 let mut guild = guild.into_active_model();
 
                 match cmd {
                     ConfigSetCommand::Serveme { key } => {
-                        guild.serveme_api_key.set_if_not_equals(Some(key));
+                        guild.serveme_api_key.set_if_not_equals(key);
                     }
                     ConfigSetCommand::GameFormat { format } => {
-                        guild.game_format.set_if_not_equals(Some(format));
+                        guild.game_format.set_if_not_equals(format);
                     }
                     ConfigSetCommand::ScheduleChannel { channel } => {
-                        guild.schedule_channel_id.set_if_not_equals(Some(channel));
+                        guild.schedule_channel_id.set_if_not_equals(channel);
                     }
-                    ConfigSetCommand::RglTeam { id: team_id } => {
-                        guild.rgl_team_id.set_if_not_equals(Some(team_id));
+                    ConfigSetCommand::RglTeam { id } => {
+                        guild.rgl_team_id.set_if_not_equals(id);
 
-                        let team = RglTeam::get(team_id).await?;
+                        if let Some(team_id) = id {
+                            let team = RglTeam::get(team_id).await?;
 
-                        let season = RglSeason::get(team.season_id).await?;
+                            let season = RglSeason::get(team.season_id).await?;
 
-                        guild
-                            .game_format
-                            .set_if_not_equals(Some(season.format_name));
+                            guild
+                                .game_format
+                                .set_if_not_equals(Some(season.format_name));
+                        }
                     }
-                }
-
-                guild
-            }
-            Self::Unset(cmd) => {
-                let mut guild = guild.into_active_model();
-
-                match cmd {
-                    ConfigUnsetCommand::Serveme => {
-                        guild.serveme_api_key = Set(None);
-                    }
-                    ConfigUnsetCommand::GameFormat => {
-                        guild.game_format.set_if_not_equals(None);
-                    }
-                    ConfigUnsetCommand::ScheduleChannel => {
-                        guild.schedule_channel_id.set_if_not_equals(None);
-                        guild.schedule_message_id.set_if_not_equals(None);
-                    }
-                    ConfigUnsetCommand::RglTeam => {
-                        guild.rgl_team_id.set_if_not_equals(None);
+                    ConfigSetCommand::ScrimDivision { division } => {
+                        guild.scrim_division.set_if_not_equals(division);
                     }
                 }
 
-                guild
+                let guild = guild.update(&tx).await?;
+
+                interaction
+                    .create_response(
+                        &ctx,
+                        CreateInteractionResponse::Message(create_message().embeds(vec![
+                            success_embed("Configuration updated."),
+                            guild.config_embed(),
+                        ])),
+                    )
+                    .await?;
+
+                tx.commit().await?;
             }
-        };
-
-        let guild = active_guild.update(&tx).await?;
-
-        interaction
-            .create_response(
-                &ctx,
-                CreateInteractionResponse::Message(create_message().embeds(vec![
-                    success_embed("Configuration updated."),
-                    guild.config_embed(),
-                ])),
-            )
-            .await?;
-
-        tx.commit().await?;
+        }
 
         Ok(())
     }
