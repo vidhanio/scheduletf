@@ -1,4 +1,4 @@
-use sea_orm::EntityTrait;
+use sea_orm::{EntityTrait, TransactionTrait};
 use serenity::all::{CommandInteraction, Context, EditInteractionResponse};
 use serenity_commands::SubCommand;
 use time::OffsetDateTime;
@@ -32,6 +32,10 @@ impl DeleteCommand {
         let mut res = game::Entity::delete_by_id((guild.id, self.game))
             .exec_with_returning(&tx)
             .await?;
+
+        tx.commit().await?;
+
+        let tx = bot.db.begin().await?;
 
         let Some(game) = res.pop() else {
             return Err(BotError::GameNotFound);
