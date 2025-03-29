@@ -225,11 +225,7 @@ pub fn time_string(time: Time) -> String {
 }
 
 pub fn lfs_date_string(date: Date) -> String {
-    let weekday = date.weekday().to_string()[..3].to_lowercase();
-    let month = date.month().to_string()[..3].to_lowercase();
-    let day = date.day();
-
-    format!("{weekday} {month} {day}")
+    date.weekday().to_string()[..3].to_lowercase()
 }
 
 pub fn lfs_date_string_single(date: Date) -> String {

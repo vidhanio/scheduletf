@@ -90,7 +90,7 @@ impl LfsCommand {
                     map.into_iter()
                         .map(|(date, games)| {
                             format!(
-                                "{}: {}",
+                                "{} {}",
                                 lfs_date_string(date),
                                 games
                                     .into_iter()
