@@ -20,32 +20,52 @@ use crate::{Bot, BotResult, error::BotError, rgl::RglProfile};
 #[derive(Debug, Commands)]
 pub enum AllCommands {
     /// Configure the bot.
-    #[command(builder(default_member_permissions(Permissions::MANAGE_GUILD)))]
+    #[command(builder(
+        default_member_permissions(Permissions::MANAGE_GUILD),
+        add_integration_type(InstallationContext::Guild),
+        add_context(InteractionContext::Guild),
+    ))]
     Config(ConfigCommand),
 
     /// Manage scrims.
     #[command(
         autocomplete,
-        builder(default_member_permissions(Permissions::MANAGE_GUILD))
+        builder(
+            default_member_permissions(Permissions::MANAGE_GUILD),
+            add_integration_type(InstallationContext::Guild),
+            add_context(InteractionContext::Guild),
+        )
     )]
     Scrim(ScrimCommand),
 
     /// Manage matches.
     #[command(
         autocomplete,
-        builder(default_member_permissions(Permissions::MANAGE_GUILD))
+        builder(
+            default_member_permissions(Permissions::MANAGE_GUILD),
+            add_integration_type(InstallationContext::Guild),
+            add_context(InteractionContext::Guild),
+        )
     )]
     Match(MatchCommand),
 
     /// Manage games.
     #[command(
         autocomplete,
-        builder(default_member_permissions(Permissions::MANAGE_GUILD))
+        builder(
+            default_member_permissions(Permissions::MANAGE_GUILD),
+            add_integration_type(InstallationContext::Guild),
+            add_context(InteractionContext::Guild),
+        )
     )]
     Game(GameCommand),
 
     /// Refresh the schedule.
-    #[command(builder(default_member_permissions(Permissions::MANAGE_GUILD)))]
+    #[command(builder(
+        default_member_permissions(Permissions::MANAGE_GUILD),
+        add_integration_type(InstallationContext::Guild),
+        add_context(InteractionContext::Guild),
+    ))]
     Refresh(RefreshCommand),
 
     #[command(name = "RGL.gg Profile", context_menu = "user")]
